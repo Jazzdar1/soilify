@@ -1,0 +1,7 @@
+{
+  "name": "Soilify ",
+  "description": "A production-ready WhatsApp ordering system for farmers with voice-note intent detection, AI crop advice, and a comprehensive admin CRM dashboard for managing vermicompost distribution.",
+  "requestFramePermissions": [
+    "microphone"
+  ]
+}
