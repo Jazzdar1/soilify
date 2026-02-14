@@ -176,7 +176,7 @@ const AdminView: React.FC<AdminViewProps> = ({
         )}
       </main>
 
-      {/* EDIT PRODUCT MODAL - RESTORED ALL FIELDS */}
+      {/* EDIT PRODUCT MODAL */}
       {editingProduct && (
         <div className="fixed inset-0 z-[60] flex items-center justify-center p-4 bg-black/50 backdrop-blur-sm">
            <form onSubmit={handleSaveProduct} className="bg-white p-6 rounded-2xl w-full max-w-md shadow-2xl max-h-[90vh] overflow-y-auto">
@@ -191,9 +191,6 @@ const AdminView: React.FC<AdminViewProps> = ({
                  <div className="flex gap-2">
                     <input type="number" className="w-full p-2 border rounded" placeholder="Stock Count" value={editingProduct.stockCount} onChange={e=>setEditingProduct({...editingProduct, stockCount: +e.target.value})} />
                     <input className="w-full p-2 border rounded" placeholder="Category" value={editingProduct.category} onChange={e=>setEditingProduct({...editingProduct, category: e.target.value})} />
-                 </div>
-                 <div className="flex gap-2">
-                    <input className="w-full p-2 border rounded" placeholder="Unit (e.g. Kg)" value={editingProduct.unit} onChange={e=>setEditingProduct({...editingProduct, unit: e.target.value})} />
                  </div>
                  <textarea className="w-full p-2 border rounded" rows={3} placeholder="Description" value={editingProduct.description} onChange={e=>setEditingProduct({...editingProduct, description: e.target.value})} />
                  <div className="flex gap-2 items-center">
@@ -214,7 +211,8 @@ const AdminView: React.FC<AdminViewProps> = ({
                <div className="mb-4 bg-gray-50 p-3 rounded-lg border">
                    <p className="text-sm"><strong>Customer:</strong> {viewingOrder.farmerName}</p>
                    <p className="text-sm"><strong>Status:</strong> {viewingOrder.status}</p>
-                   <p className="text-sm"><strong>Address:</strong> {viewingOrder.location}, {viewingOrder.district}</p>
+                   {viewingOrder.paymentStatus === 'Refund Requested' && <p className="text-sm text-blue-600 font-bold mt-1">⚠️ Customer Requested Refund</p>}
+                   {viewingOrder.status === 'Return Requested' && <p className="text-sm text-red-600 font-bold mt-1">⚠️ Return Requested: {viewingOrder.returnReason}</p>}
                </div>
                
                <div className="space-y-2">

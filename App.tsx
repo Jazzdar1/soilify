@@ -6,7 +6,11 @@ import { Smartphone, LayoutDashboard, Loader2, LogOut } from 'lucide-react';
 import { BRAND_LOGO_URL } from './constants';
 import { supabase } from './services/supabaseClient';
 
-// --- DATA MAPPERS (CRITICAL: Ensures all Cloud Data is read correctly) ---
+// --- CONFIGURATION ---
+const ADMIN_EMAIL = 'darajazb@gmail.com'; 
+const RAZORPAY_KEY_ID = 'rzp_test_1DP5mmOlF5G5ag'; // Replace with your actual Key ID
+
+// --- DATA MAPPERS ---
 const mapOrderFromDB = (dbItem: any): Order => ({
   id: dbItem.id,
   farmerName: dbItem.farmer_name || 'Guest',
@@ -52,7 +56,6 @@ const mapProductFromDB = (dbItem: any): Product => ({
 });
 
 const App: React.FC = () => {
-  // --- STATE MANAGEMENT ---
   const [view, setView] = useState<AppView>(AppView.FARMER);
   const [isAdminAuthenticated, setIsAdminAuthenticated] = useState(false);
   const [user, setUser] = useState<User>({ name: '', email: '', phone: '', address: '', isLoggedIn: false });
@@ -72,7 +75,6 @@ const App: React.FC = () => {
   
   const [paymentModes, setPaymentModes] = useState([{ id: 'cod', label: 'Cash on Delivery', active: true }]);
 
-  // --- INITIALIZATION ---
   useEffect(() => {
     const init = async () => {
         try {
@@ -80,13 +82,13 @@ const App: React.FC = () => {
             await handleSession(session);
             await fetchData();
             
-            // Realtime Listeners
-            const changes = supabase.channel('db-changes')
+            supabase.auth.onAuthStateChange((_event, session) => handleSession(session));
+            
+            const channel = supabase.channel('db-changes')
                 .on('postgres_changes', { event: '*', schema: 'public', table: 'orders' }, fetchData)
                 .on('postgres_changes', { event: '*', schema: 'public', table: 'products' }, fetchData)
                 .subscribe();
-                
-            return () => { supabase.removeChannel(changes); };
+            return () => { supabase.removeChannel(channel); };
         } catch (e) { 
             console.error("Init Error:", e); 
         } finally { 
@@ -104,9 +106,14 @@ const App: React.FC = () => {
       return;
     }
 
-    const isAdmin = session.user.email?.toLowerCase() === 'darajazb@gmail.com';
+    const isAdmin = session.user.email?.toLowerCase() === ADMIN_EMAIL.toLowerCase();
     setIsAdminAuthenticated(isAdmin);
-    if (!isAdmin && view === AppView.ADMIN) setView(AppView.FARMER);
+    
+    if (isAdmin) {
+        setView(AppView.ADMIN);
+    } else if (view === AppView.ADMIN) {
+        setView(AppView.FARMER);
+    }
 
     const { data: profile } = await supabase.from('profiles').select('*').eq('id', session.user.id).maybeSingle();
     setUser({
@@ -118,11 +125,13 @@ const App: React.FC = () => {
     });
   };
 
+  // --- FIXED LOGOUT ---
   const handleLogout = async () => {
-    await supabase.auth.signOut();
     setUser({ name: '', email: '', phone: '', address: '', isLoggedIn: false });
     setIsAdminAuthenticated(false);
     setView(AppView.FARMER);
+    await supabase.auth.signOut();
+    window.location.reload(); 
   };
 
   const fetchData = async () => {
@@ -138,10 +147,8 @@ const App: React.FC = () => {
     const { data: { user: authUser } } = await supabase.auth.getUser();
     if (!authUser) return alert("Please log in first.");
     
-    // 1. Optimistic Update
     setOrders(prev => [newOrder, ...prev]);
     
-    // 2. Save to Cloud (CRITICAL: Includes user_id for RLS visibility)
     const { error } = await supabase.from('orders').insert([{
       id: newOrder.id, 
       user_id: authUser.id, 
@@ -163,9 +170,8 @@ const App: React.FC = () => {
 
     if(error) {
         console.error("Order Insert Error:", error);
-        alert("Error saving order. Please check your connection.");
+        alert("Error saving order. Check connection.");
     } else {
-        // 3. Update Stock
         for (const item of cartItems) {
             const newStock = Math.max(0, item.stockCount - item.quantity);
             await supabase.from('products').update({ 
@@ -173,14 +179,12 @@ const App: React.FC = () => {
                 in_stock: newStock > 0 
             }).eq('id', item.id);
         }
-        // Force refresh to ensure ID sync
         fetchData();
     }
   };
 
   const handleUpdateOrder = async (updatedOrder: Order) => {
      setOrders(prev => prev.map(o => o.id === updatedOrder.id ? updatedOrder : o));
-     
      await supabase.from('orders').update({ 
          status: updatedOrder.status, 
          payment_status: updatedOrder.paymentStatus, 
@@ -197,28 +201,23 @@ const App: React.FC = () => {
   };
 
   const handleDeleteOrder = async (id: string) => {
-      // Optimistic delete
       setOrders(prev => prev.filter(o => o.id !== id));
-      
       const { error } = await supabase.from('orders').delete().eq('id', id);
       if (error) {
           console.error("Delete failed:", error);
-          alert("Could not delete from cloud. Permission denied or network error.");
-          fetchData(); // Revert on failure
+          alert("Could not delete from cloud.");
+          fetchData(); 
       }
   };
 
   const handleClearHistory = async () => {
       const completedStatuses = ['Delivered', 'Cancelled', 'Refunded', 'Rejected'];
-      
-      // Optimistic delete
       setOrders(prev => prev.filter(o => !completedStatuses.includes(o.status)));
-      
       const { error } = await supabase.from('orders').delete().in('status', completedStatuses);
       if (error) {
           console.error("Clear History failed:", error);
           alert("Could not clear history.");
-          fetchData(); // Revert
+          fetchData();
       }
   };
 
@@ -253,7 +252,6 @@ const App: React.FC = () => {
 
   if (loading) return <div className="h-screen flex items-center justify-center"><Loader2 className="animate-spin text-green-600"/></div>;
 
-  // --- ADMIN VIEW (Full Screen) ---
   if (view === AppView.ADMIN && isAdminAuthenticated) {
       return (
         <div className="w-full h-screen bg-gray-50 overflow-hidden flex flex-col font-sans">
@@ -279,14 +277,13 @@ const App: React.FC = () => {
       );
   }
 
-  // --- FARMER VIEW (Phone Frame) ---
   return (
     <div className="min-h-screen bg-gray-200 flex justify-center items-center p-0 sm:p-4 font-sans">
       <div className="w-full max-w-[480px] h-[100dvh] sm:h-[850px] bg-white sm:rounded-3xl shadow-2xl overflow-hidden flex flex-col relative border-x border-gray-300">
           <div className="bg-white border-b p-2 flex justify-center gap-2 z-50 shadow-sm shrink-0">
             <button onClick={() => setView(AppView.FARMER)} className="flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-bold bg-green-600 text-white shadow-md"><Smartphone size={18} /> Farmer App</button>
             {isAdminAuthenticated && (
-                <button onClick={() => setView(AppView.ADMIN)} className="flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-bold text-gray-500 hover:bg-gray-100"><LayoutDashboard size={18} /> Admin</button>
+                <button onClick={() => setView(AppView.ADMIN)} className="flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-bold text-gray-500 hover:bg-gray-100"><LayoutDashboard size={18} /> Admin Panel</button>
             )}
           </div>
           <main className="flex-1 relative overflow-hidden flex flex-col">
@@ -296,6 +293,7 @@ const App: React.FC = () => {
                   onLogin={()=>{}} onNewOrder={handleNewOrder} 
                   onUpdateOrder={handleUpdateOrder} onLogout={handleLogout}
                   onDeleteOrder={handleDeleteOrder} onClearHistory={handleClearHistory}
+                  razorpayKey={RAZORPAY_KEY_ID} // Pass Key ID
               />
           </main>
       </div>

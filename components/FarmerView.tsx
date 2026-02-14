@@ -2,8 +2,7 @@ import React, { useState, useMemo, useEffect } from 'react';
 import { 
   ShoppingBag, Search, Home, MessageSquare, 
   User as UserIcon, Star, X, CheckCircle2,
-  Check, ChevronLeft, Heart, Share2, MapPin, 
-  ShieldCheck, Phone, MessageCircle, Send, Printer, Plus, Minus, Trash2, RefreshCw
+  Check, ChevronLeft, Heart, Share2, Phone, MessageCircle, Send, Printer, Plus, Minus, Trash2, RefreshCw, CreditCard
 } from 'lucide-react';
 import { CATEGORIES, BRAND_NAME } from '../constants';
 import { FarmerTab, Product, CartItem, User as UserType, Order } from '../types';
@@ -23,10 +22,11 @@ interface FarmerViewProps {
   onDeleteOrder: (id: string) => void;
   onClearHistory: () => void;
   onLogout: () => void;
+  razorpayKey: string; // New Prop
 }
 
 const FarmerView: React.FC<FarmerViewProps> = ({ 
-  user, products, orders, onNewOrder, onUpdateOrder, onDeleteOrder, onClearHistory, onLogout, shippingRates 
+  user, products, orders, onNewOrder, onUpdateOrder, onDeleteOrder, onClearHistory, onLogout, shippingRates, brandLogo, razorpayKey 
 }) => {
   const [activeTab, setActiveTab] = useState<FarmerTab>(FarmerTab.SHOP);
   const [cart, setCart] = useState<CartItem[]>([]);
@@ -43,7 +43,7 @@ const FarmerView: React.FC<FarmerViewProps> = ({
   const [reviewOrder, setReviewOrder] = useState<Order | null>(null);
 
   const [checkoutStep, setCheckoutStep] = useState<'cart' | 'details' | 'payment' | 'success'>('cart');
-  const [paymentMethod, setPaymentMethod] = useState<'cod' | 'upi' | 'card'>('cod');
+  const [paymentMethod, setPaymentMethod] = useState<'cod' | 'online'>('cod');
   
   const [authForm, setAuthForm] = useState({ name: '', email: '', phone: '', address: '', password: '' });
   const [isSignUp, setIsSignUp] = useState(false);
@@ -63,10 +63,16 @@ const FarmerView: React.FC<FarmerViewProps> = ({
 
   const [toast, setToast] = useState<{message: string, show: boolean}>({ message: '', show: false });
 
-  // Reset Quantity
+  // LOAD RAZORPAY SCRIPT DYNAMICALLY
+  useEffect(() => {
+    const script = document.createElement('script');
+    script.src = 'https://checkout.razorpay.com/v1/checkout.js';
+    script.async = true;
+    document.body.appendChild(script);
+  }, []);
+
   useEffect(() => { if (selectedProduct) setSelectedQuantity(1); }, [selectedProduct]);
 
-  // Filters
   const filteredProducts = useMemo(() => {
     return products.filter(p => (selectedCategory === 'All' || p.category === selectedCategory) && p.name.toLowerCase().includes(searchQuery.toLowerCase()));
   }, [products, selectedCategory, searchQuery]);
@@ -123,6 +129,7 @@ const FarmerView: React.FC<FarmerViewProps> = ({
         } else {
             const { error } = await supabase.auth.signInWithPassword({ email: authForm.email, password: authForm.password });
             if (error) throw error;
+            window.location.reload();
         }
     } catch (err: any) { alert(err.message); } 
     finally { setAuthLoading(false); }
@@ -144,16 +151,16 @@ const FarmerView: React.FC<FarmerViewProps> = ({
       window.open(`https://wa.me/?text=${encodeURIComponent(text)}`, '_blank');
   };
 
-  const handlePlaceOrder = () => {
-    if(!checkoutForm.phone || !checkoutForm.address || !checkoutForm.district) return alert("Please fill all details!");
+  // --- ORDER PLACEMENT LOGIC ---
+  const triggerOrderPlacement = (status: 'Paid' | 'Awaiting') => {
     const newOrder: Order = {
       id: 'ORD-' + Math.floor(100000 + Math.random() * 900000),
       farmerName: checkoutForm.name, phone: checkoutForm.phone, email: checkoutForm.email,
       product: cart.map(i => `${i.name} (x${i.quantity})`).join(', '),
       quantity: cart.reduce((s, i) => s + i.quantity, 0),
       totalPrice: finalTotal, status: 'Pending', 
-      paymentStatus: paymentMethod === 'cod' ? 'Awaiting' : 'Paid',
-      paymentMethod: paymentMethod === 'cod' ? 'COD' : 'UPI',
+      paymentStatus: status,
+      paymentMethod: paymentMethod === 'cod' ? 'COD' : 'Online',
       location: `${checkoutForm.address}, ${checkoutForm.district}`, 
       district: checkoutForm.district, nearby: checkoutForm.nearby, pincode: checkoutForm.pincode,
       date: new Date().toLocaleDateString(), type: 'Marketplace'
@@ -161,11 +168,49 @@ const FarmerView: React.FC<FarmerViewProps> = ({
     onNewOrder(newOrder, cart);
     setCheckoutStep('success');
     setCart([]);
-    showToast("Booking Confirmation Sent!");
+    showToast(status === 'Paid' ? "Payment Successful! Order Placed." : "Booking Confirmed!");
     
-    // --- WHATSAPP FIX: SEND TO SOILIFY BUSINESS NUMBER ---
-    const waMsg = `*New Order Placed!* %0A🆔 Order ID: ${newOrder.id}%0A👤 Name: ${newOrder.farmerName}%0A📦 Items: ${newOrder.product}%0A💰 Total: ₹${newOrder.totalPrice}%0A📍 District: ${newOrder.district}`;
+    const waMsg = `*New Order Placed!* %0A🆔 Order ID: ${newOrder.id}%0A👤 Name: ${newOrder.farmerName}%0A📦 Items: ${newOrder.product}%0A💰 Total: ₹${newOrder.totalPrice} (${status})%0A📍 District: ${newOrder.district}`;
     window.open(`https://wa.me/919682577635?text=${waMsg}`, '_blank');
+  };
+
+  // --- RAZORPAY HANDLER ---
+  const handleRazorpayPayment = () => {
+      const options = {
+          key: razorpayKey, // Passed from App.tsx
+          amount: finalTotal * 100, // Amount in paise
+          currency: "INR",
+          name: BRAND_NAME,
+          description: "Order Payment",
+          image: brandLogo,
+          handler: function (response: any) {
+              // Payment Success
+              console.log("Razorpay Success:", response);
+              triggerOrderPlacement('Paid');
+          },
+          prefill: {
+              name: checkoutForm.name,
+              email: checkoutForm.email,
+              contact: checkoutForm.phone
+          },
+          theme: { color: "#16a34a" }
+      };
+      
+      const rzp1 = new (window as any).Razorpay(options);
+      rzp1.on('payment.failed', function (response: any){
+          alert("Payment Failed: " + response.error.description);
+      });
+      rzp1.open();
+  };
+
+  const handlePlaceOrderClick = () => {
+      if(!checkoutForm.phone || !checkoutForm.address || !checkoutForm.district) return alert("Please fill all details!");
+      
+      if (paymentMethod === 'online') {
+          handleRazorpayPayment();
+      } else {
+          triggerOrderPlacement('Awaiting');
+      }
   };
 
   const handleCancelOrder = async (order: Order) => {
@@ -257,12 +302,24 @@ const FarmerView: React.FC<FarmerViewProps> = ({
         {activeTab === FarmerTab.ORDERS && (
            !user.isLoggedIn ? (
              <div className="p-8 flex flex-col items-center justify-center min-h-[60vh]">
-                <h2 className="text-2xl font-bold mb-6">Sign In</h2>
+                <h2 className="text-2xl font-bold mb-6">{isSignUp ? 'Create Account' : 'Sign In'}</h2>
                 <form onSubmit={handleAuthSubmit} className="w-full space-y-4">
-                    <input type="email" className="w-full p-3 border rounded-lg" placeholder="Email" value={authForm.email} onChange={e => setAuthForm({...authForm, email: e.target.value})} />
-                    <input type="password" className="w-full p-3 border rounded-lg" placeholder="Password" value={authForm.password} onChange={e => setAuthForm({...authForm, password: e.target.value})} />
-                    <button disabled={authLoading} className="w-full py-3 bg-[#FFD814] rounded-lg font-bold border border-[#FCD200]">{authLoading ? 'Processing...' : 'Sign In'}</button>
+                    {isSignUp && (
+                        <>
+                           <input className="w-full p-3 border rounded-lg" placeholder="Full Name" value={authForm.name} onChange={e => setAuthForm({...authForm, name: e.target.value})} required />
+                           <input className="w-full p-3 border rounded-lg" placeholder="Phone Number" value={authForm.phone} onChange={e => setAuthForm({...authForm, phone: e.target.value})} required />
+                           <input className="w-full p-3 border rounded-lg" placeholder="Address" value={authForm.address} onChange={e => setAuthForm({...authForm, address: e.target.value})} required />
+                        </>
+                    )}
+                    <input type="email" className="w-full p-3 border rounded-lg" placeholder="Email" value={authForm.email} onChange={e => setAuthForm({...authForm, email: e.target.value})} required />
+                    <input type="password" className="w-full p-3 border rounded-lg" placeholder="Password" value={authForm.password} onChange={e => setAuthForm({...authForm, password: e.target.value})} required />
+                    <button disabled={authLoading} className="w-full py-3 bg-[#FFD814] rounded-lg font-bold border border-[#FCD200]">
+                        {authLoading ? 'Processing...' : isSignUp ? 'Create Account' : 'Sign In'}
+                    </button>
                 </form>
+                <button onClick={() => setIsSignUp(!isSignUp)} className="mt-6 text-blue-600 text-sm font-bold hover:underline">
+                    {isSignUp ? 'Already have an account? Sign In' : 'New to Soilify? Create Account'}
+                </button>
              </div>
            ) : (
              <div className="bg-gray-100 min-h-full">
@@ -320,6 +377,7 @@ const FarmerView: React.FC<FarmerViewProps> = ({
           </div>
       )}
 
+      {/* ... MODALS ... */}
       {returnOrder && (<div className="absolute inset-0 z-[100] bg-black/60 backdrop-blur-sm flex items-center justify-center p-4"><div className="bg-white w-full max-w-xs rounded-2xl p-6 shadow-2xl animate-in zoom-in"><h3 className="font-bold text-lg mb-2">Return Order</h3><textarea className="w-full p-2 border rounded mb-3 text-sm" placeholder="Reason..." value={returnReason} onChange={e=>setReturnReason(e.target.value)} /><div className="flex gap-2"><button onClick={()=>setReturnOrder(null)} className="flex-1 py-2 border rounded">Cancel</button><button onClick={handleSubmitReturn} className="flex-1 py-2 bg-red-600 text-white rounded">Submit</button></div></div></div>)}
       {reviewOrder && (<div className="absolute inset-0 z-[100] bg-black/60 backdrop-blur-sm flex items-center justify-center p-4"><div className="bg-white w-full max-w-xs rounded-2xl p-6 shadow-2xl animate-in zoom-in"><h3 className="font-bold text-lg mb-2">Rate</h3><div className="flex gap-2 justify-center mb-4 text-[#F4A608]">{[1,2,3,4,5].map(s => <Star key={s} fill={s <= ratingVal ? "currentColor" : "none"} onClick={()=>setRatingVal(s)} size={24} />)}</div><textarea className="w-full p-2 border rounded mb-3 text-sm" placeholder="Review..." value={reviewText} onChange={e=>setReviewText(e.target.value)} /><div className="flex gap-2"><button onClick={()=>setReviewOrder(null)} className="flex-1 py-2 border rounded">Cancel</button><button onClick={handleSubmitReview} className="flex-1 py-2 bg-green-600 text-white rounded">Submit</button></div></div></div>)}
       {showWhatsAppForm && (<div className="absolute inset-0 z-[100] bg-black/60 backdrop-blur-sm flex items-center justify-center p-4"><div className="bg-white w-full max-w-xs rounded-2xl p-6 shadow-2xl relative animate-in zoom-in"><button onClick={() => setShowWhatsAppForm(false)} className="absolute top-3 right-3 text-gray-400"><X size={20}/></button><div className="text-center mb-4"><h3 className="font-bold text-gray-900">Order via WhatsApp</h3></div><div className="space-y-3"><input className="w-full p-2.5 border rounded-lg text-sm bg-gray-50" placeholder="Name" value={waForm.name} onChange={e=>setWaForm({...waForm, name: e.target.value})} /><input className="w-full p-2.5 border rounded-lg text-sm bg-gray-50" placeholder="Address" value={waForm.address} onChange={e=>setWaForm({...waForm, address: e.target.value})} /><textarea className="w-full p-2.5 border rounded-lg text-sm bg-gray-50" rows={3} placeholder="Details" value={waForm.details} onChange={e=>setWaForm({...waForm, details: e.target.value})} /><button onClick={handleSendWhatsApp} className="w-full py-2.5 bg-green-600 text-white rounded-lg font-bold text-sm shadow-md flex items-center justify-center gap-2"><Send size={16} /> Send</button></div></div></div>)}
@@ -335,7 +393,16 @@ const FarmerView: React.FC<FarmerViewProps> = ({
                   <div className="space-y-3"><h3 className="font-bold text-gray-900 border-b pb-2">Shipping</h3><input className="w-full p-2.5 border rounded-lg" placeholder="Name" value={checkoutForm.name} onChange={e=>setCheckoutForm({...checkoutForm, name: e.target.value})} /><input className="w-full p-2.5 border rounded-lg" placeholder="Phone" value={checkoutForm.phone} onChange={e=>setCheckoutForm({...checkoutForm, phone: e.target.value})} /><input className="w-full p-2.5 border rounded-lg" placeholder="Email" value={checkoutForm.email} onChange={e=>setCheckoutForm({...checkoutForm, email: e.target.value})} /><input className="w-full p-2.5 border rounded-lg" placeholder="District" value={checkoutForm.district} onChange={e=>setCheckoutForm({...checkoutForm, district: e.target.value})} /><input className="w-full p-2.5 border rounded-lg" placeholder="Nearby Landmark" value={checkoutForm.nearby} onChange={e=>setCheckoutForm({...checkoutForm, nearby: e.target.value})} /><input className="w-full p-2.5 border rounded-lg" placeholder="Pincode" value={checkoutForm.pincode} onChange={e=>setCheckoutForm({...checkoutForm, pincode: e.target.value})} /><textarea className="w-full p-2.5 border rounded-lg" placeholder="Full Address" value={checkoutForm.address} onChange={e=>setCheckoutForm({...checkoutForm, address: e.target.value})} />{shippingCost > 0 && <p className="text-xs text-green-600 font-bold">Shipping: ₹{shippingCost}</p>}<button onClick={() => setCheckoutStep('payment')} className="w-full mt-2 py-3 bg-[#FFD814] rounded-lg font-bold shadow-sm">Next</button></div>
                )}
                {checkoutStep === 'payment' && (
-                  <div className="space-y-4"><h3 className="font-bold text-gray-900 border-b pb-2">Payment</h3><p className="font-bold text-lg">Total: ₹{finalTotal}</p><label className="flex items-center gap-3 p-3 border rounded-lg bg-white"><input type="radio" checked={paymentMethod==='cod'} onChange={()=>setPaymentMethod('cod')} /> COD</label><label className="flex items-center gap-3 p-3 border rounded-lg bg-white"><input type="radio" checked={paymentMethod==='upi'} onChange={()=>setPaymentMethod('upi')} /> UPI</label><button onClick={handlePlaceOrder} className="w-full py-3 bg-[#FFD814] rounded-lg font-bold shadow-sm">Place Order</button></div>
+                  <div className="space-y-4">
+                      <h3 className="font-bold text-gray-900 border-b pb-2">Payment</h3>
+                      <p className="font-bold text-lg">Total: ₹{finalTotal}</p>
+                      <label className="flex items-center gap-3 p-3 border rounded-lg bg-white"><input type="radio" checked={paymentMethod==='cod'} onChange={()=>setPaymentMethod('cod')} /> Cash on Delivery</label>
+                      <label className="flex items-center gap-3 p-3 border rounded-lg bg-white"><input type="radio" checked={paymentMethod==='online'} onChange={()=>setPaymentMethod('online')} /> Online Payment (Cards/UPI)</label>
+                      
+                      <button onClick={handlePlaceOrderClick} className="w-full py-3 bg-[#FFD814] rounded-lg font-bold shadow-sm flex items-center justify-center gap-2">
+                          {paymentMethod === 'online' ? <><CreditCard size={18} /> Pay Now</> : 'Place Order'}
+                      </button>
+                  </div>
                )}
                {checkoutStep === 'success' && (
                   <div className="flex flex-col items-center justify-center h-full text-center p-6"><CheckCircle2 size={64} className="text-green-600 mb-4" /><h2 className="text-2xl font-black text-gray-900 mb-2">Success!</h2><button onClick={() => { setShowCart(false); setActiveTab(FarmerTab.ORDERS); setCheckoutStep('cart'); }} className="w-full py-3 bg-[#FFD814] rounded-lg font-bold border border-[#FCD200]">Track Order</button></div>
