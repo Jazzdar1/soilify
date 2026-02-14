@@ -2,251 +2,224 @@ import React, { useState, useEffect } from 'react';
 import { AppView, User, Product, Order } from './types';
 import FarmerView from './components/FarmerView';
 import AdminView from './components/AdminView';
-import { Smartphone, LayoutDashboard, Lock, LogIn } from 'lucide-react';
-import { BRAND_LOGO_URL, BRAND_NAME, INITIAL_PRODUCTS, INITIAL_ORDERS } from './constants';
+import { Smartphone, LayoutDashboard, Loader2, LogOut } from 'lucide-react';
+import { BRAND_LOGO_URL } from './constants';
 import { supabase } from './services/supabaseClient';
+
+// --- DATA MAPPERS ---
+const mapOrderFromDB = (dbItem: any): Order => ({
+  id: dbItem.id,
+  farmerName: dbItem.farmer_name || 'Guest',
+  phone: dbItem.phone || '',
+  product: dbItem.product_details || 'Items',
+  quantity: dbItem.quantity || 1,
+  totalPrice: dbItem.total_price || 0,
+  status: dbItem.status || 'Pending',
+  paymentStatus: dbItem.payment_status || 'Pending',
+  paymentMethod: dbItem.payment_method || 'COD',
+  location: dbItem.location || '',
+  date: new Date(dbItem.created_at).toLocaleDateString(),
+  type: dbItem.type || 'Marketplace',
+  trackingId: dbItem.tracking_id,
+  shippedDate: dbItem.shipped_date,
+  deliveredDate: dbItem.delivered_date,
+  rejectionReason: dbItem.rejection_reason
+});
+
+const mapProductFromDB = (dbItem: any): Product => ({
+  id: dbItem.id,
+  name: dbItem.name,
+  price: dbItem.price,
+  discount: dbItem.discount || 0,
+  unit: dbItem.unit || 'Kg',
+  category: dbItem.category || 'General',
+  image: dbItem.image || 'https://placehold.co/400',
+  description: dbItem.description || '',
+  rating: dbItem.rating || 5,
+  reviews: dbItem.reviews || 0,
+  inStock: dbItem.in_stock,
+  stockCount: dbItem.stock_count
+});
 
 const App: React.FC = () => {
   const [view, setView] = useState<AppView>(AppView.FARMER);
   const [isAdminAuthenticated, setIsAdminAuthenticated] = useState(false);
-  const [adminLoginForm, setAdminLoginForm] = useState({ username: '', password: '' });
-  const [loginError, setLoginError] = useState('');
-
   const [user, setUser] = useState<User>({ name: '', email: '', phone: '', isLoggedIn: false });
+  const [loading, setLoading] = useState(true);
   
-  // State from DB
-  const [products, setProducts] = useState<Product[]>(INITIAL_PRODUCTS);
-  const [orders, setOrders] = useState<Order[]>(INITIAL_ORDERS);
-  
+  const [products, setProducts] = useState<Product[]>([]);
+  const [orders, setOrders] = useState<Order[]>([]);
   const [brandLogo, setBrandLogo] = useState<string>(BRAND_LOGO_URL);
-  const [registeredUsers, setRegisteredUsers] = useState<User[]>([]);
-  
-  const [shippingRates, setShippingRates] = useState([
-    { region: 'Srinagar', rate: 0 },
-    { region: 'Shopian', rate: 50 },
-    { region: 'Anantnag', rate: 60 },
-    { region: 'Sopore', rate: 80 },
-    { region: 'Other', rate: 100 }
-  ]);
-  
-  const [paymentModes, setPaymentModes] = useState([
-    { id: 'cod', label: 'Cash on Delivery', active: true },
-    { id: 'upi', label: 'UPI (PhonePe/GPay)', active: true },
-    { id: 'card', label: 'Credit/Debit Card', active: true }
-  ]);
+  const [shippingRates, setShippingRates] = useState([{ region: 'Srinagar', rate: 0 }]);
+  const [paymentModes, setPaymentModes] = useState([{ id: 'cod', label: 'Cash on Delivery', active: true }]);
 
-  // Load Data from Supabase
   useEffect(() => {
-    const loadData = async () => {
-      // 1. Fetch Products
-      const { data: pData, error: pError } = await supabase.from('products').select('*');
-      if (!pError && pData && pData.length > 0) {
-        setProducts(pData as Product[]);
-      }
+    const safetyTimer = setTimeout(() => setLoading(false), 3000);
 
-      // 2. Fetch Orders
-      const { data: oData, error: oError } = await supabase.from('orders').select('*');
-      if (!oError && oData && oData.length > 0) {
-        setOrders(oData as Order[]);
-      }
+    const init = async () => {
+        try {
+            const { data: { session } } = await supabase.auth.getSession();
+            await handleSession(session);
+            await fetchData();
+            
+            const { data: { subscription } } = supabase.auth.onAuthStateChange((_event, session) => handleSession(session));
+            return subscription;
+        } catch (e) {
+            console.error("Init failed:", e);
+        } finally {
+            setLoading(false);
+            clearTimeout(safetyTimer);
+        }
     };
+
+    init();
     
-    // Attempt load, fallback to constants if DB empty or error (useful for dev)
-    loadData();
+    // Realtime listeners
+    const orderSub = supabase.channel('orders-realtime').on('postgres_changes', { event: '*', schema: 'public', table: 'orders' }, fetchData).subscribe();
+    const prodSub = supabase.channel('products-realtime').on('postgres_changes', { event: '*', schema: 'public', table: 'products' }, fetchData).subscribe();
+
+    return () => { supabase.removeAllChannels(); };
   }, []);
 
-  const handleAdminLogin = (e: React.FormEvent) => {
-    e.preventDefault();
-    if (adminLoginForm.username === 'Admin' && adminLoginForm.password === 'Admin@123') {
-      setIsAdminAuthenticated(true);
-      setLoginError('');
-    } else {
-      setLoginError('Invalid credentials. Use Admin / Admin@123');
+  const handleSession = async (session: any) => {
+    if (!session) {
+      setUser({ name: '', email: '', phone: '', isLoggedIn: false });
+      setIsAdminAuthenticated(false);
+      // Force back to Farmer view if logged out
+      setView(AppView.FARMER);
+      return;
     }
+
+    // STRICT ADMIN CHECK: Only show admin features for this email
+    const isAdmin = session.user.email?.toLowerCase() === 'darajazb@gmail.com';
+    setIsAdminAuthenticated(isAdmin);
+
+    // If a non-admin somehow gets to the admin view, kick them out
+    if (!isAdmin && view === AppView.ADMIN) {
+        setView(AppView.FARMER);
+    }
+
+    const { data: profile } = await supabase.from('profiles').select('*').eq('id', session.user.id).maybeSingle();
+    
+    setUser({
+      name: profile?.full_name || session.user.user_metadata?.full_name || 'Farmer',
+      email: session.user.email,
+      phone: profile?.phone || '',
+      address: profile?.address || '',
+      isLoggedIn: true
+    });
   };
 
-  const handleUpdateProduct = async (updated: Product) => {
-    // Optimistic Update
-    setProducts(prev => prev.map(p => p.id === updated.id ? updated : p));
-    // DB Update
-    await supabase.from('products').update(updated).eq('id', updated.id);
+  const handleLogout = async () => {
+    setUser({ name: '', email: '', phone: '', isLoggedIn: false });
+    setIsAdminAuthenticated(false);
+    setView(AppView.FARMER);
+    await supabase.auth.signOut();
   };
 
-  const handleDeleteProduct = async (id: string) => {
-    if(window.confirm("Delete this product?")) {
-      setProducts(prev => prev.filter(p => p.id !== id));
-      await supabase.from('products').delete().eq('id', id);
-    }
+  const fetchData = async () => {
+    const { data: pData } = await supabase.from('products').select('*').order('created_at', { ascending: false });
+    if (pData) setProducts(pData.map(mapProductFromDB));
+    
+    const { data: oData } = await supabase.from('orders').select('*').order('created_at', { ascending: false });
+    if (oData) setOrders(oData.map(mapOrderFromDB));
   };
 
-  const handleAddProduct = async (newP: Product) => {
-    // Remove ID if generated locally, let DB handle it or use UUID
-    const { data, error } = await supabase.from('products').insert([newP]).select();
-    if (!error && data) {
-      setProducts(prev => [data[0] as Product, ...prev]);
-    } else {
-      // Fallback for demo
-      setProducts(prev => [newP, ...prev]);
-    }
+  // --- HANDLERS ---
+  const handleNewOrder = async (newOrder: Order) => {
+    const { data: { user: authUser } } = await supabase.auth.getUser();
+    if (!authUser) return alert("Please log in first.");
+    setOrders(prev => [newOrder, ...prev]);
+    const { error } = await supabase.from('orders').insert([{
+      id: newOrder.id, user_id: authUser.id, farmer_name: newOrder.farmerName,
+      phone: newOrder.phone, product_details: newOrder.product, quantity: newOrder.quantity,
+      total_price: newOrder.totalPrice, status: newOrder.status, payment_status: newOrder.paymentStatus,
+      payment_method: newOrder.paymentMethod, location: newOrder.location, type: newOrder.type
+    }]);
+    if (error) { console.error(error); alert("Failed to save order."); fetchData(); }
   };
 
   const handleUpdateOrder = async (updatedOrder: Order) => {
-    setOrders(prev => prev.map(o => o.id === updatedOrder.id ? updatedOrder : o));
-    await supabase.from('orders').update(updatedOrder).eq('id', updatedOrder.id);
+     setOrders(prev => prev.map(o => o.id === updatedOrder.id ? updatedOrder : o));
+     await supabase.from('orders').update({ 
+         status: updatedOrder.status, payment_status: updatedOrder.paymentStatus, 
+         tracking_id: updatedOrder.trackingId, shipped_date: updatedOrder.shippedDate, 
+         delivered_date: updatedOrder.deliveredDate, rejection_reason: updatedOrder.rejectionReason 
+     }).eq('id', updatedOrder.id);
   };
 
-  const handleNewOrder = async (order: Order) => {
-    // 1. Add Order
-    const { data, error } = await supabase.from('orders').insert([order]).select();
-    
-    if (!error && data) {
-      const savedOrder = data[0] as Order;
-      setOrders(prev => [savedOrder, ...prev]);
-      
-      // 2. Update Stock
-      // Note: In real app, do this via Database Function/Trigger for atomicity
-      const productNames = savedOrder.product.split(',').map(s => s.trim());
-      
-      const newProducts = products.map(p => {
-        if (productNames.some(name => p.name.includes(name))) { // Simplified matching
-          const newStock = Math.max(0, p.stockCount - savedOrder.quantity); // Logic assumes 1 qty per item type for simplicity
-          supabase.from('products').update({ stockCount: newStock }).eq('id', p.id);
-          return { ...p, stockCount: newStock };
-        }
-        return p;
-      });
-      setProducts(newProducts);
-    } else {
-      // Fallback
-      setOrders(prev => [order, ...prev]);
-    }
+  const handleAddProduct = async (p: Product) => { 
+      setProducts(prev => [p, ...prev]);
+      await supabase.from('products').insert([{ id: p.id || `p-${Date.now()}`, name: p.name, price: p.price, discount: p.discount, category: p.category, image: p.image, description: p.description, stock_count: p.stockCount, unit: p.unit }]); 
   };
+  
+  const handleUpdateProduct = async (p: Product) => { 
+      setProducts(prev => prev.map(prod => prod.id === p.id ? p : prod));
+      await supabase.from('products').update({ name: p.name, price: p.price, discount: p.discount, stock_count: p.stockCount, category: p.category, description: p.description, image: p.image, unit: p.unit }).eq('id', p.id); 
+  };
+  
+  const handleDeleteProduct = async (id: string) => { 
+      setProducts(prev => prev.filter(p => p.id !== id));
+      await supabase.from('products').delete().eq('id', id); 
+  };
+  
+  const handleUpdateShipping = (r: any[]) => setShippingRates(r);
+  const handleUpdatePayments = (p: any[]) => setPaymentModes(p);
+  const handleUpdateLogo = (l: string) => setBrandLogo(l);
 
-  const handleLogin = (u: User) => {
-    setUser(u);
-    // In real app, save user to DB here
-  };
+  if (loading) {
+      return (
+          <div className="h-screen w-screen flex flex-col items-center justify-center bg-gray-50">
+             <Loader2 size={48} className="text-green-600 animate-spin mb-4" />
+             <p className="text-gray-500 font-bold animate-pulse">Loading Soilify...</p>
+          </div>
+      );
+  }
 
   return (
-    <div className="min-h-screen flex flex-col bg-gray-50 font-sans">
-      <nav className="bg-white border-b border-gray-200 px-6 py-3 sticky top-0 z-50 shadow-sm">
-        <div className="max-w-7xl mx-auto flex justify-between items-center">
-          <div className="flex items-center gap-4">
-            <div className="w-12 h-12 rounded-2xl overflow-hidden border border-gray-100 bg-white shadow-sm">
-              <img src={brandLogo} alt={BRAND_NAME} className="w-full h-full object-cover" />
-            </div>
-            <div>
-              <h1 className="text-xl font-black text-gray-900 tracking-tighter leading-none">{BRAND_NAME}</h1>
-              <span className="text-[10px] text-indigo-600 font-black uppercase tracking-[0.2em] mt-1 inline-block">Enterprise Ecosystem</span>
-            </div>
-          </div>
+    <div className="min-h-screen bg-gray-200 flex justify-center items-center p-0 sm:p-4 font-sans">
+      <div className="w-full max-w-[480px] h-[100dvh] sm:h-[850px] bg-white sm:rounded-3xl shadow-2xl overflow-hidden flex flex-col relative border-x border-gray-300">
           
-          <div className="flex items-center gap-6">
-            <div className="flex bg-gray-100 p-1.5 rounded-[18px]">
-              <button
-                onClick={() => setView(AppView.FARMER)}
-                className={`flex items-center gap-2 px-5 py-2.5 rounded-xl text-xs font-black transition-all ${
-                  view === AppView.FARMER ? 'bg-white text-indigo-700 shadow-xl' : 'text-gray-500 hover:text-gray-700'
-                }`}
-              >
-                <Smartphone size={16} />
-                FARMER PORTAL
-              </button>
-              <button
-                onClick={() => setView(AppView.ADMIN)}
-                className={`flex items-center gap-2 px-5 py-2.5 rounded-xl text-xs font-black transition-all ${
-                  view === AppView.ADMIN ? 'bg-white text-indigo-700 shadow-xl' : 'text-gray-500 hover:text-gray-700'
-                }`}
-              >
-                <LayoutDashboard size={16} />
-                ADMIN PANEL
-              </button>
-            </div>
-            {isAdminAuthenticated && view === AppView.ADMIN && (
-              <button 
-                onClick={() => setIsAdminAuthenticated(false)}
-                className="flex items-center gap-2 text-red-500 font-black text-[10px] uppercase hover:bg-red-50 px-4 py-2 rounded-xl transition-all"
-              >
-                <Lock size={16} /> LOGOUT
-              </button>
+          {/* HEADER SWITCHER */}
+          <div className="bg-white border-b p-2 flex justify-center gap-2 z-50 shadow-sm shrink-0">
+            <button onClick={() => setView(AppView.FARMER)} className={`flex-1 flex items-center justify-center gap-2 px-3 py-2 rounded-lg text-sm font-bold transition-all ${view === AppView.FARMER ? 'bg-green-600 text-white shadow-md' : 'text-gray-500 hover:bg-gray-100'}`}>
+              <Smartphone size={18} /> Farmer App
+            </button>
+            
+            {/* SECURE: Only show Admin Button if Authenticated as Admin */}
+            {isAdminAuthenticated && (
+                <button onClick={() => setView(AppView.ADMIN)} className={`flex-1 flex items-center justify-center gap-2 px-3 py-2 rounded-lg text-sm font-bold transition-all ${view === AppView.ADMIN ? 'bg-indigo-600 text-white shadow-md' : 'text-gray-500 hover:bg-gray-100'}`}>
+                <LayoutDashboard size={18} /> Admin Panel
+                </button>
             )}
           </div>
-        </div>
-      </nav>
 
-      <main className="flex-1 overflow-hidden relative">
-        {view === AppView.FARMER ? (
-          <FarmerView 
-            user={user} 
-            products={products} 
-            orders={orders}
-            paymentModes={paymentModes}
-            shippingRates={shippingRates}
-            brandLogo={brandLogo}
-            onLogin={handleLogin} 
-            onNewOrder={handleNewOrder}
-          />
-        ) : (
-          !isAdminAuthenticated ? (
-            <div className="absolute inset-0 z-[100] flex items-center justify-center bg-gray-50/90 backdrop-blur-xl p-4">
-              <div className="bg-white w-full max-sm rounded-[48px] shadow-3xl border border-gray-100 p-12 animate-in zoom-in duration-300">
-                <div className="text-center mb-10">
-                  <div className="w-24 h-24 bg-indigo-50 text-indigo-600 rounded-[32px] mx-auto flex items-center justify-center mb-6 shadow-xl shadow-indigo-100/50">
-                    <Lock size={48} strokeWidth={2.5} />
-                  </div>
-                  <h2 className="text-3xl font-black text-gray-900 tracking-tighter italic underline decoration-indigo-500 underline-offset-8">Admin Access</h2>
-                  <p className="text-[10px] text-gray-400 font-black uppercase tracking-[0.3em] mt-6">Secure Personnel Authorization</p>
-                </div>
-                
-                <form onSubmit={handleAdminLogin} className="space-y-6">
-                  <div className="space-y-2">
-                    <label className="text-[10px] font-black text-gray-400 uppercase tracking-widest ml-1">Staff Username</label>
-                    <input 
-                      type="text" 
-                      placeholder="Admin"
-                      className="w-full px-6 py-5 bg-gray-50 border-2 border-transparent focus:border-indigo-500 rounded-[24px] outline-none transition-all font-bold text-lg"
-                      value={adminLoginForm.username}
-                      onChange={e => setAdminLoginForm({...adminLoginForm, username: e.target.value})}
-                      required
+          {/* MAIN CONTENT */}
+          <main className="flex-1 relative overflow-hidden flex flex-col">
+            {view === AppView.FARMER ? (
+              <FarmerView 
+                  user={user} products={products} orders={orders} 
+                  brandLogo={brandLogo} paymentModes={paymentModes} shippingRates={shippingRates} 
+                  onLogin={()=>{}} 
+                  onNewOrder={handleNewOrder} 
+                  onUpdateOrder={handleUpdateOrder} 
+                  onLogout={handleLogout} 
+              />
+            ) : (
+                // Only render AdminView if authenticated (Double Protection)
+                isAdminAuthenticated ? (
+                    <AdminView 
+                        products={products} orders={orders} shippingRates={shippingRates} 
+                        paymentModes={paymentModes} brandLogo={brandLogo} registeredUsers={[user]} 
+                        onUpdateProduct={handleUpdateProduct} onDeleteProduct={handleDeleteProduct} 
+                        onAddProduct={handleAddProduct} onUpdateOrder={handleUpdateOrder} 
+                        onUpdateShipping={handleUpdateShipping} onUpdatePayments={handleUpdatePayments} 
+                        onUpdateLogo={handleUpdateLogo} 
                     />
-                  </div>
-                  <div className="space-y-2">
-                    <label className="text-[10px] font-black text-gray-400 uppercase tracking-widest ml-1">Personnel Key</label>
-                    <input 
-                      type="password" 
-                      placeholder="••••••••"
-                      className="w-full px-6 py-5 bg-gray-50 border-2 border-transparent focus:border-indigo-500 rounded-[24px] outline-none transition-all font-bold text-lg"
-                      value={adminLoginForm.password}
-                      onChange={e => setAdminLoginForm({...adminLoginForm, password: e.target.value})}
-                      required
-                    />
-                  </div>
-                  {loginError && <p className="text-red-500 text-[10px] font-black text-center mt-2 bg-red-50 p-3 rounded-2xl border border-red-100">{loginError}</p>}
-                  <button type="submit" className="w-full py-6 bg-indigo-600 text-white rounded-[24px] font-black shadow-2xl shadow-indigo-200 flex items-center justify-center gap-3 hover:bg-indigo-700 transition-all mt-8 active:scale-95 group uppercase tracking-widest text-xs">
-                    Authorize Access <LogIn size={18} className="group-hover:translate-x-1 transition-transform" />
-                  </button>
-                </form>
-              </div>
-            </div>
-          ) : (
-            <AdminView 
-              products={products} 
-              orders={orders}
-              shippingRates={shippingRates}
-              paymentModes={paymentModes}
-              brandLogo={brandLogo}
-              registeredUsers={registeredUsers}
-              onUpdateProduct={handleUpdateProduct}
-              onDeleteProduct={handleDeleteProduct}
-              onAddProduct={handleAddProduct}
-              onUpdateOrder={handleUpdateOrder}
-              onUpdateShipping={setShippingRates}
-              onUpdatePayments={setPaymentModes}
-              onUpdateLogo={setBrandLogo}
-            />
-          )
-        )}
-      </main>
+                ) : null
+            )}
+          </main>
+      </div>
     </div>
   );
 };
