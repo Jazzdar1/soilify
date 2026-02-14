@@ -2,7 +2,7 @@ import React, { useState, useMemo, useEffect } from 'react';
 import { 
   ShoppingBag, Search, Home, MessageSquare, 
   User as UserIcon, Star, X, CheckCircle2,
-  Check, ChevronLeft, Heart, Share2, Phone, MessageCircle, Send, Printer, Plus, Minus, Trash2, RefreshCw, CreditCard
+  Check, ChevronLeft, Heart, Share2, Phone, MessageCircle, Send, Printer, Plus, Minus, Trash2, RefreshCw, CreditCard, UserCircle
 } from 'lucide-react';
 import { CATEGORIES, BRAND_NAME } from '../constants';
 import { FarmerTab, Product, CartItem, User as UserType, Order } from '../types';
@@ -22,11 +22,11 @@ interface FarmerViewProps {
   onDeleteOrder: (id: string) => void;
   onClearHistory: () => void;
   onLogout: () => void;
-  razorpayKey: string; // New Prop
+  razorpayKey: string;
 }
 
 const FarmerView: React.FC<FarmerViewProps> = ({ 
-  user, products, orders, onNewOrder, onUpdateOrder, onDeleteOrder, onClearHistory, onLogout, shippingRates, brandLogo, razorpayKey 
+  user, products, orders, onNewOrder, onUpdateOrder, onDeleteOrder, onClearHistory, onLogout, shippingRates, razorpayKey, brandLogo 
 }) => {
   const [activeTab, setActiveTab] = useState<FarmerTab>(FarmerTab.SHOP);
   const [cart, setCart] = useState<CartItem[]>([]);
@@ -63,7 +63,21 @@ const FarmerView: React.FC<FarmerViewProps> = ({
 
   const [toast, setToast] = useState<{message: string, show: boolean}>({ message: '', show: false });
 
-  // LOAD RAZORPAY SCRIPT DYNAMICALLY
+  // FILTER ORDERS FOR CURRENT USER
+  const myOrders = useMemo(() => {
+      if (!user.isLoggedIn) return [];
+      return orders.filter(o => 
+          (o.email && o.email.toLowerCase() === user.email.toLowerCase()) || 
+          (o.phone && o.phone === user.phone) ||
+          (o.user_id === user.id)
+      );
+  }, [orders, user]);
+
+  const getFinalPrice = (price: number, discount: number = 0) => {
+      if (!discount || discount <= 0) return price;
+      return Math.round(price - (price * discount / 100));
+  };
+
   useEffect(() => {
     const script = document.createElement('script');
     script.src = 'https://checkout.razorpay.com/v1/checkout.js';
@@ -72,6 +86,12 @@ const FarmerView: React.FC<FarmerViewProps> = ({
   }, []);
 
   useEffect(() => { if (selectedProduct) setSelectedQuantity(1); }, [selectedProduct]);
+
+  useEffect(() => {
+      if (!checkoutForm.district) { setShippingCost(0); return; }
+      const matchedRate = shippingRates.find(r => r.region.toLowerCase().trim() === checkoutForm.district.toLowerCase().trim());
+      setShippingCost(matchedRate ? matchedRate.rate : 0);
+  }, [checkoutForm.district, shippingRates]);
 
   const filteredProducts = useMemo(() => {
     return products.filter(p => (selectedCategory === 'All' || p.category === selectedCategory) && p.name.toLowerCase().includes(searchQuery.toLowerCase()));
@@ -84,7 +104,7 @@ const FarmerView: React.FC<FarmerViewProps> = ({
 
   const currentProductReviews = useMemo(() => {
       if (!selectedProduct) return [];
-      return orders.filter(o => o.product.includes(selectedProduct.name) && o.userReview).map(o => ({
+      return orders.filter(o => o.product.toLowerCase().includes(selectedProduct.name.toLowerCase()) && o.userReview && o.userReview.trim() !== "").map(o => ({
           user: o.farmerName, rating: o.userRating || 5, text: o.userReview, date: o.date
       }));
   }, [selectedProduct, orders]);
@@ -95,7 +115,13 @@ const FarmerView: React.FC<FarmerViewProps> = ({
       return Math.round(sum / currentProductReviews.length);
   }, [currentProductReviews, selectedProduct]);
 
-  const cartTotal = useMemo(() => cart.reduce((sum, item) => sum + (item.price * item.quantity), 0), [cart]);
+  const cartTotal = useMemo(() => {
+      return cart.reduce((sum, item) => {
+          const finalPrice = getFinalPrice(item.price, item.discount);
+          return sum + (finalPrice * item.quantity);
+      }, 0);
+  }, [cart]);
+
   const finalTotal = cartTotal + shippingCost;
 
   useEffect(() => {
@@ -104,11 +130,6 @@ const FarmerView: React.FC<FarmerViewProps> = ({
       setWaForm(prev => ({ ...prev, name: user.name, address: user.address || '' }));
     }
   }, [user]);
-
-  useEffect(() => {
-      const rate = shippingRates.find(r => r.region.toLowerCase() === checkoutForm.district.toLowerCase());
-      setShippingCost(rate ? rate.rate : 0);
-  }, [checkoutForm.district, shippingRates]);
 
   useEffect(() => { if (toast.show) { const timer = setTimeout(() => setToast(prev => ({ ...prev, show: false })), 2000); return () => clearTimeout(timer); } }, [toast.show]);
 
@@ -147,11 +168,10 @@ const FarmerView: React.FC<FarmerViewProps> = ({
   };
 
   const handleShareProduct = (p: Product) => {
-      const text = `Check out this product on Soilify: ${p.name} - ₹${p.price}.`;
+      const text = `Check out this product on Soilify: ${p.name} - ₹${getFinalPrice(p.price, p.discount)}.`;
       window.open(`https://wa.me/?text=${encodeURIComponent(text)}`, '_blank');
   };
 
-  // --- ORDER PLACEMENT LOGIC ---
   const triggerOrderPlacement = (status: 'Paid' | 'Awaiting') => {
     const newOrder: Order = {
       id: 'ORD-' + Math.floor(100000 + Math.random() * 900000),
@@ -168,92 +188,41 @@ const FarmerView: React.FC<FarmerViewProps> = ({
     onNewOrder(newOrder, cart);
     setCheckoutStep('success');
     setCart([]);
-    showToast(status === 'Paid' ? "Payment Successful! Order Placed." : "Booking Confirmed!");
-    
+    showToast(status === 'Paid' ? "Payment Successful!" : "Booking Confirmed!");
     const waMsg = `*New Order Placed!* %0A🆔 Order ID: ${newOrder.id}%0A👤 Name: ${newOrder.farmerName}%0A📦 Items: ${newOrder.product}%0A💰 Total: ₹${newOrder.totalPrice} (${status})%0A📍 District: ${newOrder.district}`;
     window.open(`https://wa.me/919682577635?text=${waMsg}`, '_blank');
   };
 
-  // --- RAZORPAY HANDLER ---
   const handleRazorpayPayment = () => {
       const options = {
-          key: razorpayKey, // Passed from App.tsx
-          amount: finalTotal * 100, // Amount in paise
+          key: razorpayKey, 
+          amount: finalTotal * 100, 
           currency: "INR",
           name: BRAND_NAME,
           description: "Order Payment",
           image: brandLogo,
-          handler: function (response: any) {
-              // Payment Success
-              console.log("Razorpay Success:", response);
-              triggerOrderPlacement('Paid');
-          },
-          prefill: {
-              name: checkoutForm.name,
-              email: checkoutForm.email,
-              contact: checkoutForm.phone
-          },
+          handler: function (response: any) { triggerOrderPlacement('Paid'); },
+          prefill: { name: checkoutForm.name, email: checkoutForm.email, contact: checkoutForm.phone },
           theme: { color: "#16a34a" }
       };
-      
       const rzp1 = new (window as any).Razorpay(options);
-      rzp1.on('payment.failed', function (response: any){
-          alert("Payment Failed: " + response.error.description);
-      });
+      rzp1.on('payment.failed', function (response: any){ alert("Payment Failed: " + response.error.description); });
       rzp1.open();
   };
 
   const handlePlaceOrderClick = () => {
       if(!checkoutForm.phone || !checkoutForm.address || !checkoutForm.district) return alert("Please fill all details!");
-      
-      if (paymentMethod === 'online') {
-          handleRazorpayPayment();
-      } else {
-          triggerOrderPlacement('Awaiting');
-      }
+      if (paymentMethod === 'online') handleRazorpayPayment();
+      else triggerOrderPlacement('Awaiting');
   };
 
-  const handleCancelOrder = async (order: Order) => {
-      if (!window.confirm("Are you sure?")) return;
-      onUpdateOrder({ ...order, status: 'Cancelled', rejectionReason: 'User Cancelled' });
-      showToast("Order Cancelled");
-  };
-
-  const handleCompleteOrder = async (order: Order) => {
-      if (!window.confirm("Confirm received?")) return;
-      onUpdateOrder({ ...order, status: 'Delivered', deliveredDate: new Date().toLocaleDateString(), paymentStatus: 'Paid' });
-      showToast("Marked Received!");
-  };
-
-  const handleSubmitReturn = async () => {
-      if (!returnOrder || !returnReason) return;
-      onUpdateOrder({ ...returnOrder, status: 'Return Requested', returnReason: returnReason });
-      setReturnOrder(null);
-      showToast("Return Requested");
-  };
-
-  const handleSubmitReview = async () => {
-      if (!reviewOrder) return;
-      onUpdateOrder({ ...reviewOrder, userRating: ratingVal, userReview: reviewText });
-      setReviewOrder(null);
-      showToast("Review Submitted!");
-  };
-
-  const handleClaimRefund = async (order: Order) => {
-      onUpdateOrder({ ...order, paymentStatus: 'Refund Requested' });
-      showToast("Refund Requested!");
-  };
-
-  const handleSendWhatsApp = () => {
-      if (!waForm.name || !waForm.details) return alert("Enter details.");
-      const text = `*Inquiry from App*%0A👤 Name: ${waForm.name}%0A📝 Details: ${waForm.details}`;
-      window.open(`https://wa.me/919682577635?text=${encodeURIComponent(text)}`, '_blank');
-      setShowWhatsAppForm(false);
-  };
-
-  const StarRating = ({ rating }: { rating: number }) => (
-    <div className="flex text-[#F4A608]">{[...Array(5)].map((_, i) => <Star key={i} size={10} fill={i < Math.floor(rating) ? "currentColor" : "none"} className={i < Math.floor(rating) ? "" : "text-gray-300"} />)}</div>
-  );
+  const handleCancelOrder = async (order: Order) => { if (window.confirm("Are you sure?")) { onUpdateOrder({ ...order, status: 'Cancelled', rejectionReason: 'User Cancelled' }); showToast("Order Cancelled"); } };
+  const handleCompleteOrder = async (order: Order) => { if (window.confirm("Confirm received?")) { onUpdateOrder({ ...order, status: 'Delivered', deliveredDate: new Date().toLocaleDateString(), paymentStatus: 'Paid' }); showToast("Marked Received!"); } };
+  const handleSubmitReturn = async () => { if (!returnOrder || !returnReason) return; onUpdateOrder({ ...returnOrder, status: 'Return Requested', returnReason: returnReason }); setReturnOrder(null); showToast("Return Requested"); };
+  const handleSubmitReview = async () => { if (!reviewOrder) return; onUpdateOrder({ ...reviewOrder, userRating: ratingVal, userReview: reviewText }); setReviewOrder(null); showToast("Review Submitted!"); };
+  const handleClaimRefund = async (order: Order) => { onUpdateOrder({ ...order, paymentStatus: 'Refund Requested' }); showToast("Refund Requested!"); };
+  const handleSendWhatsApp = () => { if (!waForm.name || !waForm.details) return alert("Enter details."); const text = `*Inquiry from App*%0A👤 Name: ${waForm.name}%0A📝 Details: ${waForm.details}`; window.open(`https://wa.me/919682577635?text=${encodeURIComponent(text)}`, '_blank'); setShowWhatsAppForm(false); };
+  const StarRating = ({ rating }: { rating: number }) => (<div className="flex text-[#F4A608]">{[...Array(5)].map((_, i) => <Star key={i} size={10} fill={i < Math.floor(rating) ? "currentColor" : "none"} className={i < Math.floor(rating) ? "" : "text-gray-300"} />)}</div>);
 
   return (
     <div className="h-full bg-[#E3E6E6] flex flex-col relative w-full font-sans">
@@ -273,6 +242,17 @@ const FarmerView: React.FC<FarmerViewProps> = ({
         </header>
       )}
 
+      {activeTab !== FarmerTab.SHOP && (
+          <div className="bg-white border-b p-3 flex justify-between items-center z-50 shadow-sm shrink-0">
+            <div className="flex items-center gap-2">
+                <UserCircle className="text-green-600" size={24} />
+                <span className="font-bold text-gray-800 text-sm truncate max-w-[150px]">
+                    {user.isLoggedIn ? `Welcome, ${user.name.split(' ')[0]}` : 'Soilify App'}
+                </span>
+            </div>
+          </div>
+      )}
+
       <div className="flex-1 overflow-y-auto no-scrollbar bg-white pb-24">
         {activeTab === FarmerTab.SHOP && (
           <div className="bg-[#E3E6E6] min-h-full pb-2">
@@ -283,22 +263,30 @@ const FarmerView: React.FC<FarmerViewProps> = ({
               ))}
             </div>
             <div className="grid grid-cols-2 gap-1 p-2">
-              {filteredProducts.map(product => (
-                <div key={product.id} onClick={() => setSelectedProduct(product)} className="bg-white p-3 flex flex-col rounded-sm border border-transparent hover:border-gray-200 relative">
-                  <div className="h-40 bg-gray-50 mb-2 flex items-center justify-center relative p-2">
-                    <img src={product.image} className="max-h-full max-w-full object-contain mix-blend-multiply" />
-                    {product.discount > 0 && <span className="absolute top-2 left-2 bg-red-600 text-white text-[10px] font-bold px-1.5 py-0.5 rounded">-{product.discount}%</span>}
+              {filteredProducts.map(product => {
+                const finalPrice = getFinalPrice(product.price, product.discount);
+                return (
+                  <div key={product.id} onClick={() => setSelectedProduct(product)} className="bg-white p-3 flex flex-col rounded-sm border border-transparent hover:border-gray-200 relative">
+                    <div className="h-40 bg-gray-50 mb-2 flex items-center justify-center relative p-2">
+                      <img src={product.image} className="max-h-full max-w-full object-contain mix-blend-multiply" />
+                      {product.discount > 0 && <span className="absolute top-2 left-2 bg-red-600 text-white text-[10px] font-bold px-1.5 py-0.5 rounded">-{product.discount}%</span>}
+                    </div>
+                    <h4 className="text-xs font-normal text-gray-900 leading-snug line-clamp-2 h-9 mb-1">{product.name}</h4>
+                    <StarRating rating={product.rating} />
+                    <div className="mt-2 flex items-baseline gap-1">
+                        <span className="text-xs font-normal">₹</span>
+                        <span className="text-lg font-medium text-gray-900">{finalPrice}</span>
+                        {product.discount > 0 && <span className="text-xs text-gray-400 line-through ml-1">₹{product.price}</span>}
+                    </div>
+                    {!product.inStock && (<div className="absolute inset-0 bg-white/60 flex items-center justify-center font-bold text-red-600 border-2 border-red-600 rounded m-2">OUT OF STOCK</div>)}
                   </div>
-                  <h4 className="text-xs font-normal text-gray-900 leading-snug line-clamp-2 h-9 mb-1">{product.name}</h4>
-                  <StarRating rating={product.rating} />
-                  <div className="mt-2 flex items-baseline gap-1"><span className="text-xs font-normal">₹</span><span className="text-lg font-medium text-gray-900">{product.price}</span></div>
-                  {!product.inStock && (<div className="absolute inset-0 bg-white/60 flex items-center justify-center font-bold text-red-600 border-2 border-red-600 rounded m-2">OUT OF STOCK</div>)}
-                </div>
-              ))}
+                );
+              })}
             </div>
           </div>
         )}
 
+        {/* --- FIXED ORDERS TAB: USES myOrders FILTER --- */}
         {activeTab === FarmerTab.ORDERS && (
            !user.isLoggedIn ? (
              <div className="p-8 flex flex-col items-center justify-center min-h-[60vh]">
@@ -326,13 +314,13 @@ const FarmerView: React.FC<FarmerViewProps> = ({
                 <div className="bg-white p-4 border-b flex justify-between items-center sticky top-0">
                     <h2 className="text-lg font-bold">Your Account</h2>
                     <div className="flex gap-2">
-                        {orders.some(o => ['Delivered','Cancelled','Refunded','Rejected'].includes(o.status)) && <button onClick={onClearHistory} className="text-gray-500 text-xs font-bold px-2 py-1 bg-gray-100 rounded">Clear History</button>}
+                        {myOrders.some(o => ['Delivered','Cancelled','Refunded','Rejected'].includes(o.status)) && <button onClick={onClearHistory} className="text-gray-500 text-xs font-bold px-2 py-1 bg-gray-100 rounded">Clear History</button>}
                         <button onClick={onLogout} className="text-red-600 text-xs font-bold px-3 py-1 bg-red-50 rounded border border-red-100">Sign Out</button>
                     </div>
                 </div>
                 <div className="p-4 space-y-4">
-                    {orders.length === 0 && <p className="text-center text-gray-500 mt-10">No orders found.</p>}
-                    {orders.map(o => (
+                    {myOrders.length === 0 && <p className="text-center text-gray-500 mt-10">No orders found.</p>}
+                    {myOrders.map(o => (
                         <div key={o.id} className="bg-white p-4 rounded-lg shadow-sm border">
                             <div className="flex justify-between items-start mb-2">
                                 <div>
@@ -367,42 +355,39 @@ const FarmerView: React.FC<FarmerViewProps> = ({
              </div>
            )
         )}
-        {activeTab === FarmerTab.WHATSAPP && <WhatsAppSimulator brandLogo={brandLogo} user={user} products={products} orders={orders} onNewOrder={onNewOrder} onUpdateOrder={onUpdateOrder} />}
+        {activeTab === FarmerTab.WHATSAPP && <WhatsAppSimulator brandLogo={brandLogo} user={user} products={products} orders={orders} onNewOrder={onNewOrder} razorpayKey={razorpayKey} />}
       </div>
 
       {!selectedProduct && !showCart && !showWhatsAppForm && (
-          <div className="absolute bottom-24 right-4 flex flex-col gap-3 z-50">
-              <a href="tel:+919682577635" className="w-12 h-12 bg-blue-600 text-white rounded-full flex items-center justify-center shadow-lg hover:scale-105 transition-transform border-2 border-white"><Phone size={24} /></a>
-              <button onClick={() => setShowWhatsAppForm(true)} className="w-12 h-12 bg-green-500 text-white rounded-full flex items-center justify-center shadow-lg hover:scale-105 transition-transform border-2 border-white"><MessageCircle size={24} /></button>
-          </div>
+          <>
+            <a href="tel:+919682577635" className="fixed bottom-24 left-6 w-14 h-14 bg-gradient-to-tr from-blue-600 to-blue-400 text-white rounded-full flex items-center justify-center shadow-xl hover:scale-110 transition-transform border-4 border-white z-[60]"><Phone size={26} fill="currentColor" /></a>
+            <button onClick={() => setShowWhatsAppForm(true)} className="fixed bottom-24 right-6 w-14 h-14 bg-gradient-to-tr from-green-600 to-green-400 text-white rounded-full flex items-center justify-center shadow-xl hover:scale-110 transition-transform border-4 border-white z-[60]"><MessageCircle size={26} fill="currentColor" /></button>
+          </>
       )}
 
-      {/* ... MODALS ... */}
-      {returnOrder && (<div className="absolute inset-0 z-[100] bg-black/60 backdrop-blur-sm flex items-center justify-center p-4"><div className="bg-white w-full max-w-xs rounded-2xl p-6 shadow-2xl animate-in zoom-in"><h3 className="font-bold text-lg mb-2">Return Order</h3><textarea className="w-full p-2 border rounded mb-3 text-sm" placeholder="Reason..." value={returnReason} onChange={e=>setReturnReason(e.target.value)} /><div className="flex gap-2"><button onClick={()=>setReturnOrder(null)} className="flex-1 py-2 border rounded">Cancel</button><button onClick={handleSubmitReturn} className="flex-1 py-2 bg-red-600 text-white rounded">Submit</button></div></div></div>)}
-      {reviewOrder && (<div className="absolute inset-0 z-[100] bg-black/60 backdrop-blur-sm flex items-center justify-center p-4"><div className="bg-white w-full max-w-xs rounded-2xl p-6 shadow-2xl animate-in zoom-in"><h3 className="font-bold text-lg mb-2">Rate</h3><div className="flex gap-2 justify-center mb-4 text-[#F4A608]">{[1,2,3,4,5].map(s => <Star key={s} fill={s <= ratingVal ? "currentColor" : "none"} onClick={()=>setRatingVal(s)} size={24} />)}</div><textarea className="w-full p-2 border rounded mb-3 text-sm" placeholder="Review..." value={reviewText} onChange={e=>setReviewText(e.target.value)} /><div className="flex gap-2"><button onClick={()=>setReviewOrder(null)} className="flex-1 py-2 border rounded">Cancel</button><button onClick={handleSubmitReview} className="flex-1 py-2 bg-green-600 text-white rounded">Submit</button></div></div></div>)}
-      {showWhatsAppForm && (<div className="absolute inset-0 z-[100] bg-black/60 backdrop-blur-sm flex items-center justify-center p-4"><div className="bg-white w-full max-w-xs rounded-2xl p-6 shadow-2xl relative animate-in zoom-in"><button onClick={() => setShowWhatsAppForm(false)} className="absolute top-3 right-3 text-gray-400"><X size={20}/></button><div className="text-center mb-4"><h3 className="font-bold text-gray-900">Order via WhatsApp</h3></div><div className="space-y-3"><input className="w-full p-2.5 border rounded-lg text-sm bg-gray-50" placeholder="Name" value={waForm.name} onChange={e=>setWaForm({...waForm, name: e.target.value})} /><input className="w-full p-2.5 border rounded-lg text-sm bg-gray-50" placeholder="Address" value={waForm.address} onChange={e=>setWaForm({...waForm, address: e.target.value})} /><textarea className="w-full p-2.5 border rounded-lg text-sm bg-gray-50" rows={3} placeholder="Details" value={waForm.details} onChange={e=>setWaForm({...waForm, details: e.target.value})} /><button onClick={handleSendWhatsApp} className="w-full py-2.5 bg-green-600 text-white rounded-lg font-bold text-sm shadow-md flex items-center justify-center gap-2"><Send size={16} /> Send</button></div></div></div>)}
+      {/* --- FIXED MODALS: USES fixed inset-0 TO ALWAYS SHOW ON SCREEN --- */}
+      {returnOrder && (<div className="fixed inset-0 z-[100] bg-black/60 backdrop-blur-sm flex items-center justify-center p-4"><div className="bg-white w-full max-w-xs rounded-2xl p-6 shadow-2xl animate-in zoom-in"><h3 className="font-bold text-lg mb-2">Return Order</h3><textarea className="w-full p-2 border rounded mb-3 text-sm" placeholder="Reason..." value={returnReason} onChange={e=>setReturnReason(e.target.value)} /><div className="flex gap-2"><button onClick={()=>setReturnOrder(null)} className="flex-1 py-2 border rounded">Cancel</button><button onClick={handleSubmitReturn} className="flex-1 py-2 bg-red-600 text-white rounded">Submit</button></div></div></div>)}
+      {reviewOrder && (<div className="fixed inset-0 z-[100] bg-black/60 backdrop-blur-sm flex items-center justify-center p-4"><div className="bg-white w-full max-w-xs rounded-2xl p-6 shadow-2xl animate-in zoom-in"><h3 className="font-bold text-lg mb-2">Rate</h3><div className="flex gap-2 justify-center mb-4 text-[#F4A608]">{[1,2,3,4,5].map(s => <Star key={s} fill={s <= ratingVal ? "currentColor" : "none"} onClick={()=>setRatingVal(s)} size={24} />)}</div><textarea className="w-full p-2 border rounded mb-3 text-sm" placeholder="Review..." value={reviewText} onChange={e=>setReviewText(e.target.value)} /><div className="flex gap-2"><button onClick={()=>setReviewOrder(null)} className="flex-1 py-2 border rounded">Cancel</button><button onClick={handleSubmitReview} className="flex-1 py-2 bg-green-600 text-white rounded">Submit</button></div></div></div>)}
+      {showWhatsAppForm && (<div className="fixed inset-0 z-[100] bg-black/60 backdrop-blur-sm flex items-center justify-center p-4"><div className="bg-white w-full max-w-xs rounded-2xl p-6 shadow-2xl relative animate-in zoom-in"><button onClick={() => setShowWhatsAppForm(false)} className="absolute top-3 right-3 text-gray-400"><X size={20}/></button><div className="text-center mb-4"><h3 className="font-bold text-gray-900">Order via WhatsApp</h3></div><div className="space-y-3"><input className="w-full p-2.5 border rounded-lg text-sm bg-gray-50" placeholder="Name" value={waForm.name} onChange={e=>setWaForm({...waForm, name: e.target.value})} /><input className="w-full p-2.5 border rounded-lg text-sm bg-gray-50" placeholder="Address" value={waForm.address} onChange={e=>setWaForm({...waForm, address: e.target.value})} /><textarea className="w-full p-2.5 border rounded-lg text-sm bg-gray-50" rows={3} placeholder="Details" value={waForm.details} onChange={e=>setWaForm({...waForm, details: e.target.value})} /><button onClick={handleSendWhatsApp} className="w-full py-2.5 bg-green-600 text-white rounded-lg font-bold text-sm shadow-md flex items-center justify-center gap-2"><Send size={16} /> Send</button></div></div></div>)}
+
+      {trackingOrder && (<div className="fixed inset-0 z-[100] bg-black/50 backdrop-blur-sm flex items-end justify-center p-4"><div className="bg-white w-full rounded-2xl p-6 animate-in slide-in-from-bottom"><div className="flex justify-between items-center mb-6"><h3 className="font-bold text-lg">Arriving {trackingOrder.deliveryDate || 'Soon'}</h3><button onClick={() => setTrackingOrder(null)}><X size={24} /></button></div><div className="relative pl-4 space-y-8 before:absolute before:left-[22px] before:top-2 before:bottom-2 before:w-0.5 before:bg-gray-200"><div className="flex gap-4 relative"><div className="w-4 h-4 rounded-full bg-green-600 z-10 outline outline-4 outline-white"></div><div><p className="text-sm font-bold leading-none">Ordered</p><p className="text-xs text-gray-500">{trackingOrder.date}</p></div></div><div className="flex gap-4 relative"><div className={`w-4 h-4 rounded-full z-10 outline outline-4 outline-white ${['Shipped', 'Delivered'].includes(trackingOrder.status) ? 'bg-green-600' : 'bg-gray-300'}`}></div><div><p className={`text-sm font-bold leading-none ${['Shipped', 'Delivered'].includes(trackingOrder.status) ? 'text-black' : 'text-gray-400'}`}>Shipped</p></div></div><div className="flex gap-4 relative"><div className={`w-4 h-4 rounded-full z-10 outline outline-4 outline-white ${trackingOrder.status === 'Delivered' ? 'bg-green-600' : 'bg-gray-300'}`}></div><div><p className={`text-sm font-bold leading-none ${trackingOrder.status === 'Delivered' ? 'text-black' : 'text-gray-400'}`}>Delivered</p></div></div></div></div></div>)}
+      {invoiceOrder && (<div className="fixed inset-0 z-[100] bg-gray-900/80 backdrop-blur-sm flex items-center justify-center p-4"><div className="bg-white w-full max-w-sm rounded-lg shadow-2xl overflow-hidden animate-in zoom-in"><div className="p-4 bg-[#232f3e] text-white flex justify-between items-center"><h3 className="font-bold">Tax Invoice</h3><button onClick={() => setInvoiceOrder(null)}><X size={20} /></button></div><div className="p-6 text-sm font-mono space-y-4"><div className="flex justify-between border-b pb-4"><div><p className="font-bold text-lg">{BRAND_NAME}</p></div></div><table className="w-full text-left mt-2"><tbody><tr className="border-b"><td className="py-2"><p className="font-bold line-clamp-2">{invoiceOrder.product}</p></td><td className="py-2 text-right font-bold">₹{invoiceOrder.totalPrice}</td></tr></tbody></table><button onClick={() => alert("Printing...")} className="w-full py-3 mt-4 border border-dashed border-gray-400 rounded-lg flex items-center justify-center gap-2 text-gray-600"><Printer size={16} /> Print</button></div></div></div>)}
 
       {showCart && (
-         <div className="absolute inset-0 z-[60] bg-white flex flex-col animate-in slide-in-from-right">
+         <div className="fixed inset-0 z-[60] bg-white flex flex-col animate-in slide-in-from-right">
             <div className="bg-[#232f3e] p-3 text-white flex justify-between items-center shadow-md"><h3 className="font-bold text-base">{checkoutStep === 'cart' ? 'Cart' : 'Checkout'}</h3><button onClick={() => { setShowCart(false); setCheckoutStep('cart'); }}><X size={24}/></button></div>
             <div className="flex-1 overflow-y-auto bg-gray-50 p-4">
                {checkoutStep === 'cart' && (
-                  <div className="space-y-4">{cart.map(item => (<div key={item.id} className="bg-white p-3 rounded-lg shadow-sm border flex gap-3"><img src={item.image} className="w-16 h-16 object-contain mix-blend-multiply" /><div className="flex-1"><p className="text-sm font-medium">{item.name}</p><p className="text-lg font-bold">₹{item.price}</p><p className="text-xs text-gray-500">Qty: {item.quantity}</p></div></div>))}<button onClick={() => setCheckoutStep('details')} className="w-full mt-4 py-3 bg-[#FFD814] rounded-lg font-bold shadow-sm">Proceed</button></div>
+                  <div className="space-y-4">{cart.map(item => {
+                      const itemFinalPrice = getFinalPrice(item.price, item.discount);
+                      return (<div key={item.id} className="bg-white p-3 rounded-lg shadow-sm border flex gap-3"><img src={item.image} className="w-16 h-16 object-contain mix-blend-multiply" /><div className="flex-1"><p className="text-sm font-medium">{item.name}</p><p className="text-lg font-bold">₹{itemFinalPrice}</p><p className="text-xs text-gray-500">Qty: {item.quantity}</p></div></div>);
+                  })}<button onClick={() => setCheckoutStep('details')} className="w-full mt-4 py-3 bg-[#FFD814] rounded-lg font-bold shadow-sm">Proceed</button></div>
                )}
                {checkoutStep === 'details' && (
                   <div className="space-y-3"><h3 className="font-bold text-gray-900 border-b pb-2">Shipping</h3><input className="w-full p-2.5 border rounded-lg" placeholder="Name" value={checkoutForm.name} onChange={e=>setCheckoutForm({...checkoutForm, name: e.target.value})} /><input className="w-full p-2.5 border rounded-lg" placeholder="Phone" value={checkoutForm.phone} onChange={e=>setCheckoutForm({...checkoutForm, phone: e.target.value})} /><input className="w-full p-2.5 border rounded-lg" placeholder="Email" value={checkoutForm.email} onChange={e=>setCheckoutForm({...checkoutForm, email: e.target.value})} /><input className="w-full p-2.5 border rounded-lg" placeholder="District" value={checkoutForm.district} onChange={e=>setCheckoutForm({...checkoutForm, district: e.target.value})} /><input className="w-full p-2.5 border rounded-lg" placeholder="Nearby Landmark" value={checkoutForm.nearby} onChange={e=>setCheckoutForm({...checkoutForm, nearby: e.target.value})} /><input className="w-full p-2.5 border rounded-lg" placeholder="Pincode" value={checkoutForm.pincode} onChange={e=>setCheckoutForm({...checkoutForm, pincode: e.target.value})} /><textarea className="w-full p-2.5 border rounded-lg" placeholder="Full Address" value={checkoutForm.address} onChange={e=>setCheckoutForm({...checkoutForm, address: e.target.value})} />{shippingCost > 0 && <p className="text-xs text-green-600 font-bold">Shipping: ₹{shippingCost}</p>}<button onClick={() => setCheckoutStep('payment')} className="w-full mt-2 py-3 bg-[#FFD814] rounded-lg font-bold shadow-sm">Next</button></div>
                )}
                {checkoutStep === 'payment' && (
-                  <div className="space-y-4">
-                      <h3 className="font-bold text-gray-900 border-b pb-2">Payment</h3>
-                      <p className="font-bold text-lg">Total: ₹{finalTotal}</p>
-                      <label className="flex items-center gap-3 p-3 border rounded-lg bg-white"><input type="radio" checked={paymentMethod==='cod'} onChange={()=>setPaymentMethod('cod')} /> Cash on Delivery</label>
-                      <label className="flex items-center gap-3 p-3 border rounded-lg bg-white"><input type="radio" checked={paymentMethod==='online'} onChange={()=>setPaymentMethod('online')} /> Online Payment (Cards/UPI)</label>
-                      
-                      <button onClick={handlePlaceOrderClick} className="w-full py-3 bg-[#FFD814] rounded-lg font-bold shadow-sm flex items-center justify-center gap-2">
-                          {paymentMethod === 'online' ? <><CreditCard size={18} /> Pay Now</> : 'Place Order'}
-                      </button>
-                  </div>
+                  <div className="space-y-4"><h3 className="font-bold text-gray-900 border-b pb-2">Payment</h3><p className="font-bold text-lg">Total: ₹{finalTotal}</p><label className="flex items-center gap-3 p-3 border rounded-lg bg-white"><input type="radio" checked={paymentMethod==='cod'} onChange={()=>setPaymentMethod('cod')} /> COD</label><label className="flex items-center gap-3 p-3 border rounded-lg bg-white"><input type="radio" checked={paymentMethod==='online'} onChange={()=>setPaymentMethod('online')} /> UPI</label><button onClick={handlePlaceOrderClick} className="w-full py-3 bg-[#FFD814] rounded-lg font-bold shadow-sm">{paymentMethod === 'online' ? <><CreditCard size={18} className="inline mr-2" /> Pay Now</> : 'Place Order'}</button></div>
                )}
                {checkoutStep === 'success' && (
                   <div className="flex flex-col items-center justify-center h-full text-center p-6"><CheckCircle2 size={64} className="text-green-600 mb-4" /><h2 className="text-2xl font-black text-gray-900 mb-2">Success!</h2><button onClick={() => { setShowCart(false); setActiveTab(FarmerTab.ORDERS); setCheckoutStep('cart'); }} className="w-full py-3 bg-[#FFD814] rounded-lg font-bold border border-[#FCD200]">Track Order</button></div>
@@ -412,7 +397,7 @@ const FarmerView: React.FC<FarmerViewProps> = ({
       )}
 
       {selectedProduct && (
-        <div className="absolute inset-0 z-50 bg-white flex flex-col animate-in slide-in-from-right overflow-y-auto">
+        <div className="fixed inset-0 z-50 bg-white flex flex-col animate-in slide-in-from-right overflow-y-auto">
            <div className="bg-[#232f3e] p-3 text-white flex justify-between items-center shrink-0">
               <button onClick={() => setSelectedProduct(null)}><ChevronLeft size={24}/></button>
               <div className="flex gap-4"><button onClick={() => handleShareProduct(selectedProduct)}><Share2 size={20}/></button><Heart size={20}/></div>
@@ -421,7 +406,10 @@ const FarmerView: React.FC<FarmerViewProps> = ({
               <img src={selectedProduct.image} className="w-full h-64 object-contain mb-4 mix-blend-multiply"/>
               <h1 className="text-lg font-medium text-gray-900">{selectedProduct.name}</h1>
               <div className="flex items-center gap-2 mt-1"><StarRating rating={averageRating} /><span className="text-xs text-blue-600">{currentProductReviews.length} reviews</span></div>
-              <p className="text-2xl font-bold text-gray-900 mt-2">₹{selectedProduct.price}</p>
+              <div className="mt-2 flex items-baseline gap-1">
+                  <span className="text-2xl font-bold text-gray-900">₹{getFinalPrice(selectedProduct.price, selectedProduct.discount)}</span>
+                  {selectedProduct.discount > 0 && <span className="text-sm text-gray-400 line-through">₹{selectedProduct.price}</span>}
+              </div>
               <p className="text-sm text-gray-600 mt-4 leading-relaxed">{selectedProduct.description}</p>
               
               <div className="mt-4 flex items-center justify-between border p-3 rounded-lg bg-gray-50">
@@ -429,9 +417,24 @@ const FarmerView: React.FC<FarmerViewProps> = ({
                   <div className="flex items-center gap-4 bg-white px-3 py-1 rounded border"><button onClick={() => setSelectedQuantity(Math.max(1, selectedQuantity - 1))}><Minus size={16}/></button><span className="font-bold">{selectedQuantity}</span><button onClick={() => setSelectedQuantity(Math.min(selectedProduct.stockCount, selectedQuantity + 1))}><Plus size={16}/></button></div>
               </div>
 
+              {similarProducts.length > 0 && (
+                 <div className="mt-6">
+                    <h3 className="font-bold text-sm mb-2">Similar Products</h3>
+                    <div className="flex gap-3 overflow-x-auto pb-2">
+                       {similarProducts.map(p => (
+                          <div key={p.id} onClick={() => setSelectedProduct(p)} className="min-w-[120px] bg-white border p-2 rounded-lg flex flex-col items-center">
+                              <img src={p.image} className="h-20 object-contain"/>
+                              <p className="text-xs font-bold mt-2 line-clamp-1">{p.name}</p>
+                              <p className="text-xs font-bold text-green-700">₹{getFinalPrice(p.price, p.discount)}</p>
+                          </div>
+                       ))}
+                    </div>
+                 </div>
+              )}
+
               <div className="mt-6 border-t pt-4">
                   <h3 className="font-bold text-sm mb-3">Customer Reviews</h3>
-                  {currentProductReviews.map((r, i) => (<div key={i} className="mb-3 pb-3 border-b last:border-0"><div className="flex items-center gap-2 mb-1"><div className="w-5 h-5 rounded-full bg-gray-200 flex items-center justify-center text-[10px] font-bold">{r.user[0]}</div><span className="text-xs font-bold">{r.user}</span></div><StarRating rating={r.rating} /><p className="text-xs text-gray-600 mt-1">{r.text}</p></div>))}
+                  {currentProductReviews.length === 0 ? <p className="text-xs text-gray-400">No reviews yet.</p> : currentProductReviews.map((r, i) => (<div key={i} className="mb-3 pb-3 border-b last:border-0"><div className="flex items-center gap-2 mb-1"><div className="w-5 h-5 rounded-full bg-gray-200 flex items-center justify-center text-[10px] font-bold">{r.user[0]}</div><span className="text-xs font-bold">{r.user}</span></div><StarRating rating={r.rating} /><p className="text-xs text-gray-600 mt-1">{r.text}</p></div>))}
               </div>
 
               <button onClick={() => addToCart(selectedProduct, selectedQuantity)} className="w-full py-3 bg-[#FFD814] rounded-full font-bold mt-4 shadow-md border border-[#FCD200]">Add to Cart</button>
@@ -439,11 +442,8 @@ const FarmerView: React.FC<FarmerViewProps> = ({
         </div>
       )}
 
-      {trackingOrder && (<div className="absolute inset-0 z-[100] bg-black/50 backdrop-blur-sm flex items-end justify-center p-4"><div className="bg-white w-full rounded-2xl p-6 animate-in slide-in-from-bottom"><div className="flex justify-between items-center mb-6"><h3 className="font-bold text-lg">Arriving {trackingOrder.deliveryDate || 'Soon'}</h3><button onClick={() => setTrackingOrder(null)}><X size={24} /></button></div><div className="relative pl-4 space-y-8 before:absolute before:left-[22px] before:top-2 before:bottom-2 before:w-0.5 before:bg-gray-200"><div className="flex gap-4 relative"><div className="w-4 h-4 rounded-full bg-green-600 z-10 outline outline-4 outline-white"></div><div><p className="text-sm font-bold leading-none">Ordered</p><p className="text-xs text-gray-500">{trackingOrder.date}</p></div></div><div className="flex gap-4 relative"><div className={`w-4 h-4 rounded-full z-10 outline outline-4 outline-white ${['Shipped', 'Delivered'].includes(trackingOrder.status) ? 'bg-green-600' : 'bg-gray-300'}`}></div><div><p className={`text-sm font-bold leading-none ${['Shipped', 'Delivered'].includes(trackingOrder.status) ? 'text-black' : 'text-gray-400'}`}>Shipped</p></div></div><div className="flex gap-4 relative"><div className={`w-4 h-4 rounded-full z-10 outline outline-4 outline-white ${trackingOrder.status === 'Delivered' ? 'bg-green-600' : 'bg-gray-300'}`}></div><div><p className={`text-sm font-bold leading-none ${trackingOrder.status === 'Delivered' ? 'text-black' : 'text-gray-400'}`}>Delivered</p></div></div></div></div></div>)}
-      {invoiceOrder && (<div className="absolute inset-0 z-[100] bg-gray-900/80 backdrop-blur-sm flex items-center justify-center p-4"><div className="bg-white w-full max-w-sm rounded-lg shadow-2xl overflow-hidden animate-in zoom-in"><div className="p-4 bg-[#232f3e] text-white flex justify-between items-center"><h3 className="font-bold">Tax Invoice</h3><button onClick={() => setInvoiceOrder(null)}><X size={20} /></button></div><div className="p-6 text-sm font-mono space-y-4"><div className="flex justify-between border-b pb-4"><div><p className="font-bold text-lg">{BRAND_NAME}</p></div></div><table className="w-full text-left mt-2"><tbody><tr className="border-b"><td className="py-2"><p className="font-bold line-clamp-2">{invoiceOrder.product}</p></td><td className="py-2 text-right font-bold">₹{invoiceOrder.totalPrice}</td></tr></tbody></table><button onClick={() => alert("Printing...")} className="w-full py-3 mt-4 border border-dashed border-gray-400 rounded-lg flex items-center justify-center gap-2 text-gray-600"><Printer size={16} /> Print</button></div></div></div>)}
-
       {!selectedProduct && !showCart && (
-          <nav className="bg-white border-t border-gray-200 flex justify-around items-center py-2 pb-safe absolute bottom-0 w-full z-30 shadow-[0_-4px_6px_-1px_rgba(0,0,0,0.05)]">
+          <nav className="fixed bottom-0 w-full max-w-[480px] bg-white border-t border-gray-200 flex justify-around items-center py-2 pb-safe z-50 shadow-[0_-4px_6px_-1px_rgba(0,0,0,0.05)]">
             <button onClick={() => setActiveTab(FarmerTab.SHOP)} className={`flex flex-col items-center gap-1 w-16 ${activeTab === FarmerTab.SHOP ? 'text-[#007185] border-t-2 border-[#007185] pt-1 -mt-3' : 'text-gray-500'}`}><Home size={22} /><span className="text-[10px] font-medium">Home</span></button>
             <button onClick={() => setActiveTab(FarmerTab.ORDERS)} className={`flex flex-col items-center gap-1 w-16 ${activeTab === FarmerTab.ORDERS ? 'text-[#007185] border-t-2 border-[#007185] pt-1 -mt-3' : 'text-gray-500'}`}><UserIcon size={22} /><span className="text-[10px] font-medium">You</span></button>
             <button onClick={() => setActiveTab(FarmerTab.WHATSAPP)} className={`flex flex-col items-center gap-1 w-16 ${activeTab === FarmerTab.WHATSAPP ? 'text-[#007185] border-t-2 border-[#007185] pt-1 -mt-3' : 'text-gray-500'}`}><MessageSquare size={22} /><span className="text-[10px] font-medium">Expert</span></button>

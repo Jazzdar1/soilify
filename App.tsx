@@ -2,17 +2,15 @@ import React, { useState, useEffect } from 'react';
 import { AppView, User, Product, Order, CartItem } from './types';
 import FarmerView from './components/FarmerView';
 import AdminView from './components/AdminView';
-import { Smartphone, LayoutDashboard, Loader2, LogOut } from 'lucide-react';
+import { Smartphone, LayoutDashboard, Loader2, LogOut, UserCircle } from 'lucide-react';
 import { BRAND_LOGO_URL } from './constants';
 import { supabase } from './services/supabaseClient';
 
-// --- CONFIGURATION ---
 const ADMIN_EMAIL = 'darajazb@gmail.com'; 
-const RAZORPAY_KEY_ID = 'rzp_test_1DP5mmOlF5G5ag'; // Replace with your actual Key ID
 
-// --- DATA MAPPERS ---
 const mapOrderFromDB = (dbItem: any): Order => ({
   id: dbItem.id,
+  user_id: dbItem.user_id,
   farmerName: dbItem.farmer_name || 'Guest',
   phone: dbItem.phone || '',
   email: dbItem.email || '',
@@ -65,14 +63,7 @@ const App: React.FC = () => {
   const [orders, setOrders] = useState<Order[]>([]);
   const [brandLogo, setBrandLogo] = useState<string>(BRAND_LOGO_URL);
   
-  const [shippingRates, setShippingRates] = useState([
-    { region: 'Srinagar', rate: 50 }, 
-    { region: 'Sopore', rate: 80 },
-    { region: 'Anantnag', rate: 90 },
-    { region: 'Baramulla', rate: 80 },
-    { region: 'Pulwama', rate: 70 }
-  ]);
-  
+  const [shippingRates, setShippingRates] = useState([{ region: 'Srinagar', rate: 50 }, { region: 'Sopore', rate: 80 }, { region: 'Anantnag', rate: 90 }, { region: 'Baramulla', rate: 80 }, { region: 'Pulwama', rate: 70 }]);
   const [paymentModes, setPaymentModes] = useState([{ id: 'cod', label: 'Cash on Delivery', active: true }]);
 
   useEffect(() => {
@@ -81,7 +72,6 @@ const App: React.FC = () => {
             const { data: { session } } = await supabase.auth.getSession();
             await handleSession(session);
             await fetchData();
-            
             supabase.auth.onAuthStateChange((_event, session) => handleSession(session));
             
             const channel = supabase.channel('db-changes')
@@ -89,11 +79,7 @@ const App: React.FC = () => {
                 .on('postgres_changes', { event: '*', schema: 'public', table: 'products' }, fetchData)
                 .subscribe();
             return () => { supabase.removeChannel(channel); };
-        } catch (e) { 
-            console.error("Init Error:", e); 
-        } finally { 
-            setLoading(false); 
-        }
+        } catch (e) { console.error(e); } finally { setLoading(false); }
     };
     init();
   }, []);
@@ -105,18 +91,14 @@ const App: React.FC = () => {
       setView(AppView.FARMER);
       return;
     }
-
     const isAdmin = session.user.email?.toLowerCase() === ADMIN_EMAIL.toLowerCase();
     setIsAdminAuthenticated(isAdmin);
-    
-    if (isAdmin) {
-        setView(AppView.ADMIN);
-    } else if (view === AppView.ADMIN) {
-        setView(AppView.FARMER);
-    }
+    if (isAdmin) setView(AppView.ADMIN);
+    else if (view === AppView.ADMIN) setView(AppView.FARMER);
 
     const { data: profile } = await supabase.from('profiles').select('*').eq('id', session.user.id).maybeSingle();
     setUser({
+      id: session.user.id,
       name: profile?.full_name || session.user.user_metadata?.full_name || 'Farmer',
       email: session.user.email,
       phone: profile?.phone || '',
@@ -125,11 +107,7 @@ const App: React.FC = () => {
     });
   };
 
-  // --- FIXED LOGOUT ---
   const handleLogout = async () => {
-    setUser({ name: '', email: '', phone: '', address: '', isLoggedIn: false });
-    setIsAdminAuthenticated(false);
-    setView(AppView.FARMER);
     await supabase.auth.signOut();
     window.location.reload(); 
   };
@@ -137,12 +115,10 @@ const App: React.FC = () => {
   const fetchData = async () => {
     const { data: pData } = await supabase.from('products').select('*').order('created_at', { ascending: false });
     if (pData) setProducts(pData.map(mapProductFromDB));
-    
     const { data: oData } = await supabase.from('orders').select('*').order('created_at', { ascending: false });
     if (oData) setOrders(oData.map(mapOrderFromDB));
   };
 
-  // --- ORDER HANDLERS ---
   const handleNewOrder = async (newOrder: Order, cartItems: CartItem[]) => {
     const { data: { user: authUser } } = await supabase.auth.getUser();
     if (!authUser) return alert("Please log in first.");
@@ -164,20 +140,15 @@ const App: React.FC = () => {
       location: newOrder.location, 
       district: newOrder.district, 
       nearby: newOrder.nearby, 
-      pincode: newOrder.pincode || '', 
+      pincode: newOrder.pincode, 
       type: newOrder.type
     }]);
 
-    if(error) {
-        console.error("Order Insert Error:", error);
-        alert("Error saving order. Check connection.");
-    } else {
+    if(error) console.error(error);
+    else {
         for (const item of cartItems) {
             const newStock = Math.max(0, item.stockCount - item.quantity);
-            await supabase.from('products').update({ 
-                stock_count: newStock, 
-                in_stock: newStock > 0 
-            }).eq('id', item.id);
+            await supabase.from('products').update({ stock_count: newStock, in_stock: newStock > 0 }).eq('id', item.id);
         }
         fetchData();
     }
@@ -186,68 +157,47 @@ const App: React.FC = () => {
   const handleUpdateOrder = async (updatedOrder: Order) => {
      setOrders(prev => prev.map(o => o.id === updatedOrder.id ? updatedOrder : o));
      await supabase.from('orders').update({ 
-         status: updatedOrder.status, 
-         payment_status: updatedOrder.paymentStatus, 
-         tracking_id: updatedOrder.trackingId, 
-         shipped_date: updatedOrder.shippedDate, 
-         delivered_date: updatedOrder.deliveredDate, 
-         pickup_date: updatedOrder.pickupDate,
-         delivery_date: updatedOrder.deliveryDate, 
-         rejection_reason: updatedOrder.rejectionReason,
-         return_reason: updatedOrder.returnReason,
-         user_rating: updatedOrder.userRating,
+         status: updatedOrder.status, payment_status: updatedOrder.paymentStatus, 
+         tracking_id: updatedOrder.trackingId, shipped_date: updatedOrder.shippedDate, 
+         delivered_date: updatedOrder.deliveredDate, pickup_date: updatedOrder.pickupDate,
+         delivery_date: updatedOrder.deliveryDate, rejection_reason: updatedOrder.rejectionReason,
+         return_reason: updatedOrder.returnReason, user_rating: updatedOrder.userRating,
          user_review: updatedOrder.userReview
      }).eq('id', updatedOrder.id);
   };
 
   const handleDeleteOrder = async (id: string) => {
       setOrders(prev => prev.filter(o => o.id !== id));
-      const { error } = await supabase.from('orders').delete().eq('id', id);
-      if (error) {
-          console.error("Delete failed:", error);
-          alert("Could not delete from cloud.");
-          fetchData(); 
-      }
+      await supabase.from('orders').delete().eq('id', id);
   };
 
   const handleClearHistory = async () => {
       const completedStatuses = ['Delivered', 'Cancelled', 'Refunded', 'Rejected'];
       setOrders(prev => prev.filter(o => !completedStatuses.includes(o.status)));
-      const { error } = await supabase.from('orders').delete().in('status', completedStatuses);
-      if (error) {
-          console.error("Clear History failed:", error);
-          alert("Could not clear history.");
-          fetchData();
-      }
+      await supabase.from('orders').delete().in('status', completedStatuses);
   };
 
-  // --- PRODUCT HANDLERS ---
   const handleAddProduct = async (p: Product) => { 
-      const { error } = await supabase.from('products').insert([{ 
+      await supabase.from('products').insert([{ 
           id: p.id || `p-${Date.now()}`, name: p.name, price: p.price, discount: p.discount, 
           category: p.category, image: p.image, description: p.description, brand: p.brand,
-          stock_count: p.stockCount, unit: p.unit, rating: p.rating, reviews: p.reviews,
-          in_stock: p.stockCount > 0
+          stock_count: p.stockCount, unit: p.unit, rating: p.rating, reviews: p.reviews, in_stock: p.stockCount > 0
       }]);
-      if (error) console.error("Add Product Error:", error);
-      else fetchData();
+      fetchData();
   };
   
   const handleUpdateProduct = async (p: Product) => { 
-      const { error } = await supabase.from('products').update({ 
+      await supabase.from('products').update({ 
           name: p.name, price: p.price, discount: p.discount, stock_count: p.stockCount, 
           category: p.category, description: p.description, image: p.image, unit: p.unit,
-          rating: p.rating, reviews: p.reviews, brand: p.brand,
-          in_stock: p.stockCount > 0
+          rating: p.rating, reviews: p.reviews, brand: p.brand, in_stock: p.stockCount > 0
       }).eq('id', p.id);
-      if (error) console.error("Update Product Error:", error);
-      else fetchData();
+      fetchData();
   };
   
   const handleDeleteProduct = async (id: string) => { 
-      const { error } = await supabase.from('products').delete().eq('id', id); 
-      if (error) console.error("Delete Product Error:", error);
-      else fetchData();
+      await supabase.from('products').delete().eq('id', id); 
+      fetchData();
   };
 
   if (loading) return <div className="h-screen flex items-center justify-center"><Loader2 className="animate-spin text-green-600"/></div>;
@@ -278,14 +228,24 @@ const App: React.FC = () => {
   }
 
   return (
-    <div className="min-h-screen bg-gray-200 flex justify-center items-center p-0 sm:p-4 font-sans">
-      <div className="w-full max-w-[480px] h-[100dvh] sm:h-[850px] bg-white sm:rounded-3xl shadow-2xl overflow-hidden flex flex-col relative border-x border-gray-300">
-          <div className="bg-white border-b p-2 flex justify-center gap-2 z-50 shadow-sm shrink-0">
-            <button onClick={() => setView(AppView.FARMER)} className="flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-bold bg-green-600 text-white shadow-md"><Smartphone size={18} /> Farmer App</button>
+    <div className="min-h-screen bg-gray-200 md:flex md:justify-center md:items-center p-0 md:p-4 font-sans">
+      <div className="w-full md:w-[480px] h-[100dvh] md:h-[850px] bg-white md:rounded-3xl shadow-2xl overflow-hidden flex flex-col relative border-x border-gray-300">
+          
+          <div className="bg-white border-b p-3 flex justify-between items-center z-50 shadow-sm shrink-0">
+            <div className="flex items-center gap-2">
+                <UserCircle className="text-green-600" size={24} />
+                <span className="font-bold text-gray-800 text-sm truncate max-w-[150px]">
+                    {user.isLoggedIn ? `Hi, ${user.name.split(' ')[0]}` : 'Soilify App'}
+                </span>
+            </div>
+            
             {isAdminAuthenticated && (
-                <button onClick={() => setView(AppView.ADMIN)} className="flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-bold text-gray-500 hover:bg-gray-100"><LayoutDashboard size={18} /> Admin Panel</button>
+                <button onClick={() => setView(AppView.ADMIN)} className="flex items-center gap-1 px-3 py-1.5 rounded-full text-xs font-bold bg-indigo-50 text-indigo-700 hover:bg-indigo-100 border border-indigo-200">
+                <LayoutDashboard size={14} /> Admin
+                </button>
             )}
           </div>
+
           <main className="flex-1 relative overflow-hidden flex flex-col">
               <FarmerView 
                   user={user} products={products} orders={orders} 
@@ -293,7 +253,7 @@ const App: React.FC = () => {
                   onLogin={()=>{}} onNewOrder={handleNewOrder} 
                   onUpdateOrder={handleUpdateOrder} onLogout={handleLogout}
                   onDeleteOrder={handleDeleteOrder} onClearHistory={handleClearHistory}
-                  razorpayKey={RAZORPAY_KEY_ID} // Pass Key ID
+                  razorpayKey="rzp_test_1DP5mmOlF5G5ag"
               />
           </main>
       </div>

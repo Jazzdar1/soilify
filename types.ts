@@ -18,7 +18,7 @@ export interface Product {
   category: string;
   image: string;
   description: string;
-  brand?: string; // New field
+  brand?: string;
   rating: number;
   reviews: number;
   inStock: boolean;
@@ -31,6 +31,7 @@ export interface CartItem extends Product {
 
 export interface Order {
   id: string;
+  user_id?: string; // Critical for linking
   farmerName: string;
   phone: string;
   email?: string;
@@ -43,6 +44,7 @@ export interface Order {
   location: string;
   district?: string;
   nearby?: string;
+  pincode?: string;
   date: string;
   pickupDate?: string;
   deliveryDate?: string;
@@ -57,6 +59,7 @@ export interface Order {
 }
 
 export interface User {
+  id?: string;
   name: string;
   email: string;
   phone: string;
