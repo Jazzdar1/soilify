@@ -8,9 +8,10 @@ import { supabase } from './services/supabaseClient';
 
 const ADMIN_EMAIL = 'darajazb@gmail.com'; 
 
+// --- CRITICAL: MAPPING USER_ID CORRECTLY ---
 const mapOrderFromDB = (dbItem: any): Order => ({
   id: dbItem.id,
-  user_id: dbItem.user_id,
+  user_id: dbItem.user_id, // <--- THIS MUST BE HERE FOR HISTORY TO WORK
   farmerName: dbItem.farmer_name || 'Guest',
   phone: dbItem.phone || '',
   email: dbItem.email || '',
@@ -63,7 +64,7 @@ const App: React.FC = () => {
   const [orders, setOrders] = useState<Order[]>([]);
   const [brandLogo, setBrandLogo] = useState<string>(BRAND_LOGO_URL);
   
-  const [shippingRates, setShippingRates] = useState([{ region: 'Srinagar', rate: 50 }, { region: 'Sopore', rate: 80 }, { region: 'Anantnag', rate: 90 }, { region: 'Baramulla', rate: 80 }, { region: 'Pulwama', rate: 70 }]);
+  const [shippingRates, setShippingRates] = useState([{ region: 'Srinagar', rate: 50 }, { region: 'Sopore', rate: 80 }]);
   const [paymentModes, setPaymentModes] = useState([{ id: 'cod', label: 'Cash on Delivery', active: true }]);
 
   useEffect(() => {
@@ -96,9 +97,10 @@ const App: React.FC = () => {
     if (isAdmin) setView(AppView.ADMIN);
     else if (view === AppView.ADMIN) setView(AppView.FARMER);
 
+    // Get Profile or default to Meta Data
     const { data: profile } = await supabase.from('profiles').select('*').eq('id', session.user.id).maybeSingle();
     setUser({
-      id: session.user.id,
+      id: session.user.id, // Ensure ID is set
       name: profile?.full_name || session.user.user_metadata?.full_name || 'Farmer',
       email: session.user.email,
       phone: profile?.phone || '',
@@ -125,6 +127,7 @@ const App: React.FC = () => {
     
     setOrders(prev => [newOrder, ...prev]);
     
+    // SAVE TO CLOUD WITH USER ID
     const { error } = await supabase.from('orders').insert([{
       id: newOrder.id, 
       user_id: authUser.id, 
@@ -144,11 +147,13 @@ const App: React.FC = () => {
       type: newOrder.type
     }]);
 
-    if(error) console.error(error);
+    if(error) console.error("Order Save Error:", error);
     else {
         for (const item of cartItems) {
-            const newStock = Math.max(0, item.stockCount - item.quantity);
-            await supabase.from('products').update({ stock_count: newStock, in_stock: newStock > 0 }).eq('id', item.id);
+            await supabase.from('products').update({ 
+                stock_count: Math.max(0, item.stockCount - item.quantity), 
+                in_stock: (item.stockCount - item.quantity) > 0 
+            }).eq('id', item.id);
         }
         fetchData();
     }
