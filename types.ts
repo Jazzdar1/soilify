@@ -5,52 +5,20 @@ export enum AppView {
 
 export enum FarmerTab {
   SHOP = 'SHOP',
-  EXPERT = 'EXPERT',
-  WHATSAPP = 'WHATSAPP',
-  ORDERS = 'ORDERS'
-}
-
-export enum WhatsAppState {
-  START = 'START',
-  LANGUAGE = 'LANGUAGE',
-  LOCATION = 'LOCATION',
-  MENU = 'MENU',
-  PRODUCT_LIST = 'PRODUCT_LIST',
-  QUANTITY = 'QUANTITY',
-  ADDRESS = 'ADDRESS',
-  PAYMENT = 'PAYMENT',
-  CONFIRMED = 'CONFIRMED'
-}
-
-export interface User {
-  id?: string;
-  name: string;
-  email: string;
-  phone: string;
-  address?: string;
-  isLoggedIn: boolean;
-  role?: 'admin' | 'farmer';
-}
-
-export interface Message {
-  id: string;
-  sender: 'bot' | 'user';
-  text: string;
-  timestamp: Date;
-  type: 'text' | 'options' | 'audio' | 'order_card';
-  options?: string[];
-  audioUrl?: string;
-  payload?: any;
+  ORDERS = 'ORDERS',
+  WHATSAPP = 'WHATSAPP'
 }
 
 export interface Product {
   id: string;
   name: string;
   price: number;
+  discount?: number;
   unit: string;
-  image: string;
   category: string;
+  image: string;
   description: string;
+  brand?: string; // New field
   rating: number;
   reviews: number;
   inStock: boolean;
@@ -65,15 +33,33 @@ export interface Order {
   id: string;
   farmerName: string;
   phone: string;
-  product: string; // Comma separated string of product names
+  email?: string;
+  product: string;
   quantity: number;
   totalPrice: number;
-  status: 'Pending' | 'Approved' | 'Rejected' | 'Payment Verified' | 'Shipped' | 'Delivered' | 'Cancelled';
-  paymentStatus: 'Awaiting' | 'Verified' | 'Refunded';
+  status: 'Pending' | 'Approved' | 'Shipped' | 'Delivered' | 'Cancelled' | 'Rejected' | 'Return Requested' | 'Refunded';
+  paymentStatus: 'Awaiting' | 'Paid' | 'Failed' | 'Refund Requested' | 'Refunded';
   paymentMethod: string;
   location: string;
+  district?: string;
+  nearby?: string;
   date: string;
-  type: 'Marketplace' | 'WhatsApp' | 'Voice';
-  rejectionReason?: string;
+  pickupDate?: string;
+  deliveryDate?: string;
   trackingId?: string;
+  shippedDate?: string;
+  deliveredDate?: string;
+  rejectionReason?: string;
+  returnReason?: string;
+  userRating?: number;
+  userReview?: string;
+  type?: string;
+}
+
+export interface User {
+  name: string;
+  email: string;
+  phone: string;
+  address: string;
+  isLoggedIn: boolean;
 }
