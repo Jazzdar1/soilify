@@ -2,16 +2,15 @@ import React, { useState, useEffect } from 'react';
 import { AppView, User, Product, Order, CartItem } from './types';
 import FarmerView from './components/FarmerView';
 import AdminView from './components/AdminView';
-import { Smartphone, LayoutDashboard, Loader2, LogOut, UserCircle } from 'lucide-react';
+import { LayoutDashboard, Loader2, LogOut, UserCircle } from 'lucide-react';
 import { BRAND_LOGO_URL } from './constants';
 import { supabase } from './services/supabaseClient';
 
 const ADMIN_EMAIL = 'darajazb@gmail.com'; 
 
-// --- CRITICAL: MAPPING USER_ID CORRECTLY ---
 const mapOrderFromDB = (dbItem: any): Order => ({
   id: dbItem.id,
-  user_id: dbItem.user_id, // <--- THIS MUST BE HERE FOR HISTORY TO WORK
+  user_id: dbItem.user_id,
   farmerName: dbItem.farmer_name || 'Guest',
   phone: dbItem.phone || '',
   email: dbItem.email || '',
@@ -97,10 +96,9 @@ const App: React.FC = () => {
     if (isAdmin) setView(AppView.ADMIN);
     else if (view === AppView.ADMIN) setView(AppView.FARMER);
 
-    // Get Profile or default to Meta Data
     const { data: profile } = await supabase.from('profiles').select('*').eq('id', session.user.id).maybeSingle();
     setUser({
-      id: session.user.id, // Ensure ID is set
+      id: session.user.id,
       name: profile?.full_name || session.user.user_metadata?.full_name || 'Farmer',
       email: session.user.email,
       phone: profile?.phone || '',
@@ -122,12 +120,16 @@ const App: React.FC = () => {
   };
 
   const handleNewOrder = async (newOrder: Order, cartItems: CartItem[]) => {
+    // 1. Check Authentication
     const { data: { user: authUser } } = await supabase.auth.getUser();
     if (!authUser) return alert("Please log in first.");
     
+    // 2. Optimistic Update (Show instantly)
     setOrders(prev => [newOrder, ...prev]);
     
-    // SAVE TO CLOUD WITH USER ID
+    // 3. Save to Cloud
+    console.log("Attempting to save order:", newOrder);
+    
     const { error } = await supabase.from('orders').insert([{
       id: newOrder.id, 
       user_id: authUser.id, 
@@ -147,14 +149,21 @@ const App: React.FC = () => {
       type: newOrder.type
     }]);
 
-    if(error) console.error("Order Save Error:", error);
-    else {
+    if(error) {
+        console.error("CRITICAL SAVE ERROR:", error);
+        alert(`Failed to save order: ${error.message}. Please screenshot this and send to support.`);
+        // Revert optimistic update if failed
+        setOrders(prev => prev.filter(o => o.id !== newOrder.id));
+    } else {
+        console.log("Order Saved Successfully!");
+        // Update Stock
         for (const item of cartItems) {
             await supabase.from('products').update({ 
                 stock_count: Math.max(0, item.stockCount - item.quantity), 
                 in_stock: (item.stockCount - item.quantity) > 0 
             }).eq('id', item.id);
         }
+        // Force refresh to sync DB ID
         fetchData();
     }
   };
@@ -213,7 +222,7 @@ const App: React.FC = () => {
             <div className="bg-white border-b p-3 px-6 flex justify-between items-center shadow-sm shrink-0 z-50">
                 <h1 className="text-xl font-black text-indigo-900 flex items-center gap-2"><LayoutDashboard/> Admin Portal</h1>
                 <div className="flex gap-3">
-                    <button onClick={() => setView(AppView.FARMER)} className="flex items-center gap-2 px-4 py-2 bg-white border rounded-lg text-sm font-bold hover:bg-gray-50"><Smartphone size={18} /> Farmer View</button>
+                    <button onClick={() => setView(AppView.FARMER)} className="flex items-center gap-2 px-4 py-2 bg-white border rounded-lg text-sm font-bold hover:bg-gray-50"><UserCircle size={18} /> Farmer View</button>
                     <button onClick={handleLogout} className="flex items-center gap-2 px-4 py-2 bg-red-50 text-red-600 rounded-lg text-sm font-bold hover:bg-red-100"><LogOut size={18} /> Logout</button>
                 </div>
             </div>
